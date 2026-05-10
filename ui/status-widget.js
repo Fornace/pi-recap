@@ -36,7 +36,7 @@
 import { truncateToWidth, visibleWidth, matchesKey, Key } from "@earendil-works/pi-tui";
 import { clearNotice, getActiveState, getActiveSessionId } from "../state/store.js";
 import { formatDate } from "../util/date.js";
-import { fgAnsi, parseHex, rgbLerp, RESET, titleColor, newestColor, textColor, colorText } from "./anim.js";
+import { fgAnsi, parseHex, rgbLerp, RESET, newestColor, textColor, colorText } from "./anim.js";
 const WIDGET_KEY = "recap";
 const VIEW_SIZE = 4;
 const TICK_MS = 80;
@@ -443,7 +443,7 @@ export class StatusWidget {
         if (goal) {
             const truncated = this.truncateText(goal, availableForTitle);
             titleVisRaw = visibleWidth(truncated);
-            titleStyled = theme.bold(colorText(titleColor(), truncated));
+            titleStyled = theme.bold(theme.fg("accent", truncated));
         }
         else {
             const truncated = this.truncateText(PLACEHOLDER_GOAL, availableForTitle);

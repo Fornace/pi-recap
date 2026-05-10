@@ -55,9 +55,9 @@ export function isLightBg(): boolean {
 	return false; // default: dark
 }
 
-/** Title text: bright white on dark, near-black on light. */
+/** Title text: purple-ish, matching custom tool labels (#9575cd). */
 export function titleColor(): RGB {
-	return isLightBg() ? [10, 10, 10] : [245, 245, 245];
+	return isLightBg() ? [10, 10, 10] : [149, 117, 205];
 }
 
 /** Newest recap text: barely off-white on dark, barely off-black on light. */

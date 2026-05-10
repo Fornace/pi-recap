@@ -140,6 +140,79 @@ export default function (pi) {
             fireSessionStartNotice(sessionId, ctx);
             statusWidget.update();
         }
+        // Auto-run bench on first use: no model override, no last model, no prior bench results.
+        const state = getState(sessionId);
+        if (!state.modelOverride && !state.lastModel) {
+            const benchScript = path.join(path.dirname(fileURLToPath(import.meta.resolve("pi-bench/package.json"))), "bench.mts");
+            const outputDir = path.dirname(benchScript);
+            const csvPath = path.join(outputDir, "bench-results-v6.csv");
+            if (!fs.existsSync(csvPath)) {
+                // First run — kick off bench in background.
+                const benchLines = ["First run — benchmarking to pick your recap model…"];
+                statusWidget?.setBenchProgress(benchLines);
+                let benchTotal = 0;
+                const child = spawn("npx", ["-y", "-p", "tsx", "tsx", benchScript, "--output-dir", outputDir], {
+                    stdio: ["ignore", "pipe", "pipe"],
+                    env: process.env,
+                    cwd: outputDir,
+                });
+                child.stdout.on("data", (chunk) => {
+                    const lines = chunk.toString().split("\n");
+                    for (const raw of lines) {
+                        const line = raw.trim();
+                        if (!line)
+                            continue;
+                        if (line.includes("probing")) {
+                            benchLines.push(line.replace(/^\[bench\]\s*/, ""));
+                            statusWidget?.setBenchProgress(benchLines);
+                        }
+                        if (line.includes("->")) {
+                            benchTotal++;
+                            const short = line.replace(/^\[bench\]\s*\[\S+\]\s*/, "");
+                            const cidx = benchLines.findIndex((l) => l.startsWith("⟳ "));
+                            if (cidx >= 0)
+                                benchLines.splice(cidx, 1);
+                            benchLines.push(short);
+                            const results = benchLines.filter((l) => !l.startsWith("⟳ "));
+                            benchLines.length = 0;
+                            benchLines.push("First run — benchmarking…");
+                            benchLines.push(...results.slice(-3));
+                            benchLines.push(`⟳ ${benchTotal} models tested`);
+                            statusWidget?.setBenchProgress([...benchLines]);
+                        }
+                    }
+                });
+                child.on("close", async (code) => {
+                    if (code !== 0) {
+                        statusWidget?.setBenchProgress(undefined);
+                        return;
+                    }
+                    if (!fs.existsSync(csvPath)) {
+                        statusWidget?.setBenchProgress(undefined);
+                        return;
+                    }
+                    // Auto-pick fastest from CSV.
+                    const csv = fs.readFileSync(csvPath, "utf8");
+                    const csvLines = csv.split("\n").filter((l) => l.trim());
+                    const header = csvLines[0];
+                    const cols = header.split(",");
+                    const idxId = cols.indexOf("id");
+                    const firstRow = csvLines[1];
+                    if (firstRow) {
+                        const fastestId = firstRow.split(",")[idxId];
+                        if (fastestId) {
+                            commitState(sessionId, { ...getState(sessionId), modelOverride: fastestId });
+                            persistState(sessionId, pi);
+                            statusWidget?.setBenchProgress(undefined);
+                            statusWidget?.update();
+                            ctx.ui.notify(`Auto-selected fastest recap model: ${fastestId}`, "info");
+                        }
+                    }
+                    statusWidget?.setBenchProgress(undefined);
+                });
+                setTimeout(() => { child.kill("SIGTERM"); }, 35_000);
+            }
+        }
     });
     pi.on("session_compact", async (_event, ctx) => {
         const sessionId = sid(ctx);

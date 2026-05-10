@@ -43,7 +43,7 @@ import { truncateToWidth, visibleWidth, matchesKey, Key } from "@earendil-works/
 import { clearNotice, getActiveState, getActiveSessionId } from "../state/store.js";
 import type { HistoryEntry, Speaker } from "../state/state.js";
 import { formatDate } from "../util/date.js";
-import { fgAnsi, parseHex, rgbLerp, RESET, type RGB, titleColor, newestColor, textColor, colorText, isLightBg } from "./anim.js";
+import { fgAnsi, parseHex, rgbLerp, RESET, type RGB, newestColor, textColor, colorText, isLightBg } from "./anim.js";
 
 const WIDGET_KEY = "recap";
 const VIEW_SIZE = 4;
@@ -492,7 +492,7 @@ export class StatusWidget implements Component {
 		if (goal) {
 			const truncated = this.truncateText(goal, availableForTitle);
 			titleVisRaw = visibleWidth(truncated);
-			titleStyled = theme.bold(colorText(titleColor(), truncated));
+			titleStyled = theme.bold(theme.fg("accent", truncated));
 		} else {
 			const truncated = this.truncateText(PLACEHOLDER_GOAL, availableForTitle);
 			titleVisRaw = visibleWidth(truncated);
