@@ -117,10 +117,16 @@ export class StatusWidget implements Component {
 
 	private animTimer: ReturnType<typeof setInterval> | undefined;
 
-	/** Per-instance render counter. Drives the decoy-row width so every
-	 *  consecutive render produces a different row-0 string regardless of
-	 *  clock granularity or render cadence. See decoy comment in render(). */
+	/** Per-instance render counter. Drives the decoy-row width so the decoy
+	 *  changes whenever the widget height changes (new history entry arrives).
+	 *  pi-tui diffs frames by string equality per row index — a changing
+	 *  decoy forces every subsequent row to be re-rendered, which prevents
+	 *  orphaned border fragments in scrollback when the chat grows.
+	 *  Only bumping on height change (not every render) avoids re-rendering
+	 *  images from pi-banana and other inline terminal content. */
 	private decoyTick = 0;
+	/** Last render's history length. Used to detect height changes. */
+	private lastHistoryLength = 0;
 
 	// ── Lifecycle wiring (called from index.ts) ───────────────────────
 
@@ -224,13 +230,14 @@ export class StatusWidget implements Component {
 		// fragment (╭───╮) stranded in scrollback whenever the chat grew and
 		// the widget shifted vertically between renders.
 		//
-		// Width cycles 1..8 via a per-instance monotonic counter (NOT a
-		// clock-derived value). The previous implementation used
-		// `frameOf(now, 1, 8)` = `floor(now/1) % 8`; on pi-tui's 16 ms render
-		// throttle and the widget's 80 ms tick (both multiples of 8) the
-		// width never advanced, so the decoy never actually triggered. The
-		// counter is jitter-free and guarantees row 0 differs every render.
-		this.decoyTick = (this.decoyTick + 1) % 8;
+		// Only bump the width when history length changes (new entry arrived).
+		// This preserves the anti-artifact behavior while avoiding unnecessary
+		// full re-renders during streaming animation — which would cause inline
+		// images (pi-banana, terminal-image) to flash on every 80 ms tick.
+		if (history.length !== this.lastHistoryLength) {
+			this.decoyTick = (this.decoyTick + 1) % 8;
+			this.lastHistoryLength = history.length;
+		}
 		lines.push(" ".repeat(1 + this.decoyTick));
 
 		const liveNotice = state.notice && state.notice.expiresAt > now ? state.notice : undefined;
