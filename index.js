@@ -442,13 +442,21 @@ export default function (pi) {
                             benchLines.push(line.replace(/^\[bench\]\s*/, ""));
                             statusWidget?.setBenchProgress(benchLines);
                         }
-                        // Model result lines: count and show.
                         if (line.includes("->")) {
                             benchTotal++;
                             const short = line.replace(/^\[bench\]\s*\[\S+\]\s*/, "");
-                            // Update last line with counter instead of appending.
-                            benchLines[benchLines.length - 1] = `${benchTotal}. ${short}`;
-                            statusWidget?.setBenchProgress(benchLines);
+                            // Drop old counter, add result + new counter.
+                            const cidx = benchLines.findIndex((l) => l.startsWith("⟳ "));
+                            if (cidx >= 0)
+                                benchLines.splice(cidx, 1);
+                            benchLines.push(short);
+                            // Keep last 3 results + counter.
+                            const results = benchLines.filter((l) => !l.startsWith("⟳ "));
+                            benchLines.length = 0;
+                            benchLines.push("Benchmarking…");
+                            benchLines.push(...results.slice(-3));
+                            benchLines.push(`⟳ ${benchTotal} models tested`);
+                            statusWidget?.setBenchProgress([...benchLines]);
                         }
                     }
                 });
