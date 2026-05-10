@@ -431,14 +431,23 @@ export default function (pi) {
                 });
                 let stderr = "";
                 child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
+                let benchTotal = 0;
                 child.stdout.on("data", (chunk) => {
                     const lines = chunk.toString().split("\n");
                     for (const raw of lines) {
                         const line = raw.trim();
                         if (!line)
                             continue;
-                        if (line.includes("probing") || line.includes("->") || line.includes("timings:") || line.includes("ranked")) {
+                        if (line.includes("probing")) {
                             benchLines.push(line.replace(/^\[bench\]\s*/, ""));
+                            statusWidget?.setBenchProgress(benchLines);
+                        }
+                        // Model result lines: count and show.
+                        if (line.includes("->")) {
+                            benchTotal++;
+                            const short = line.replace(/^\[bench\]\s*\[\S+\]\s*/, "");
+                            // Update last line with counter instead of appending.
+                            benchLines[benchLines.length - 1] = `${benchTotal}. ${short}`;
                             statusWidget?.setBenchProgress(benchLines);
                         }
                     }
