@@ -494,8 +494,14 @@ export default function (pi: ExtensionAPI) {
 				const outputDir = path.dirname(benchScript);
 				const csvPath = path.join(outputDir, "bench-results-v6.csv");
 
-				// Run bench, streaming stdout so the user sees progress.
-				ctx.ui.notify("Running benchmark…", "info");
+				// Spawn bench and stream progress to notifications.
+				let progressNotifyId: string | undefined;
+				let progressLines: string[] = [];
+				const flushProgress = () => {
+					const text = progressLines.slice(-3).join("\n");
+					if (text) ctx.ui.notify(text, "info");
+				};
+
 				const child = spawn("npx", ["-y", "-p", "tsx", "tsx", benchScript, "--output-dir", outputDir], {
 					stdio: ["ignore", "pipe", "pipe"],
 					env: process.env,
@@ -503,6 +509,18 @@ export default function (pi: ExtensionAPI) {
 				});
 				let stderr = "";
 				child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
+				child.stdout.on("data", (chunk) => {
+					const lines = chunk.toString().split("\n");
+					for (const raw of lines) {
+						const line = raw.trim();
+						if (!line) continue;
+						// Show probing line and model results.
+						if (line.includes("probing") || line.includes("->") || line.includes("timings:") || line.includes("ranked")) {
+							progressLines.push(line.replace(/^\[bench\]\s*/, ""));
+							flushProgress();
+						}
+					}
+				});
 				try {
 					await new Promise<void>((resolve, reject) => {
 						child.on("close", (code) => {
