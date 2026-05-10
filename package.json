@@ -1,6 +1,6 @@
 {
   "name": "pi-recap",
-  "version": "0.8.6",
+  "version": "0.8.7",
   "description": "Session at a glance. Always-visible recap panel for pi coding agent showing goal and last few turns.",
   "author": "Francesco Frapporti <effedue@gmail.com>",
   "license": "MIT",
