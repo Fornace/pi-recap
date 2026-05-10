@@ -206,6 +206,40 @@ export default function (pi: ExtensionAPI) {
 		statusWidget = undefined;
 	});
 
+	// ── Decoy bump on input (before user message renders) ───────────
+	// The `input` event fires at the very start of session.prompt() —
+	// before skill/template expansion, before before_agent_start, and
+	// crucially before the agent emits the message_start event that
+	// renders the user message in the chat.
+	//
+	// We bump the decoy AND call update() here to force an intermediate
+	// render frame with the changed decoy. This frame paints BEFORE the
+	// chat grows (before addStreamingEntry in before_agent_start) and
+	// BEFORE the user message is rendered. Without this, the decoy bump
+	// gets batched into the same frame as the user message, and pi-tui
+	// never clears the old widget border stranded above it.
+	//
+	// update() also bumps the decoy when history.length is unchanged,
+	// so we get a double-bump here — ensuring the decoy row string is
+	// definitely different from the last painted frame.
+	//
+	// For tool-call scenarios where rendering is more complex, we
+	// run update() for a solid second (10x every 100ms) to ensure
+	// the decoy change makes it through pi-tui's render queue reliably.
+	pi.on("input", () => {
+		statusWidget?.bumpDecoy();
+		let count = 0;
+		const interval = setInterval(() => {
+			if (count >= 10) {
+				clearInterval(interval);
+				return;
+			}
+			statusWidget?.update();
+			count++;
+		}, 100);
+		return { action: "continue" };
+	});
+
 	// ── User-recap on before_agent_start ──────────────────────────
 
 	pi.on("before_agent_start", (event, ctx) => {
@@ -213,13 +247,6 @@ export default function (pi: ExtensionAPI) {
 		const sessionId = sid(ctx);
 		const prompt = event.prompt?.trim();
 		if (!prompt) return;
-
-		// Bump the decoy BEFORE calling update() so the decoy is already
-		// changed when pi-tui composites the frame that includes the new user
-		// message. Without this, pi-tui may render the user message (shifting
-		// the widget down) before update() bumps the decoy, leaving an orphan
-		// border fragment above the user message in scrollback.
-		statusWidget?.bumpDecoy();
 
 		// Allocate a streaming entry up front so the widget shows a "you"
 		// row immediately. The stream then writes deltas straight into it.
