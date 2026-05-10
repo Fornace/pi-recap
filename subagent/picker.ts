@@ -29,6 +29,7 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { type CachedModel, isCachedModelFresh } from "../state/state.js";
 import { isBlacklisted } from "../state/blacklist.js";
+import { CURATED_CHAIN } from "pi-bench";
 
 export function thinkingOffOpts(model: Model<Api>): Record<string, unknown> {
 	switch (model.api) {
@@ -42,25 +43,12 @@ export function thinkingOffOpts(model: Model<Api>): Record<string, unknown> {
 	}
 }
 
-// ── CURATED CHAIN (edit me) ───────────────────────────────────────────
+// ── CURATED CHAIN ──────────────────────────────────────────────────────
 //
-// Hand-picked ordered list of fast/cheap recap candidates. Top-to-bottom:
-// fastest + cheapest first per the latest bench (see _tmp/bench-results-v6.csv
-// for current numbers — they drift, don't inline them here).
-// Some entries are stubs for OTHER users (different provider keys); they only
-// resolve if registry.getAvailable() returns them, otherwise they fall through.
-//
-// To tweak: edit this list. No other changes needed.
+// Imported from pi-bench (the source of truth for bench data).
+// Run a new bench → pi-bench updates CURATED_CHAIN → pi-recap picks it up.
 
-export const CURATED_CHAIN: ReadonlyArray<string> = [
-	"gemini-2.5-flash-lite",                // google-vertex (bench rank 1, 460ms)
-	"MiniMaxAI/MiniMax-M2.5",               // huggingface (bench rank 2, 720ms)
-	"gemini-2.5-flash",                     // google-vertex (bench rank 3, 775ms)
-	"claude-haiku-4.5",                     // anthropic
-	"gpt-5-mini",                           // openai
-	"kimi-for-coding",                      // kimi-coding (bench rank 6, 1623ms)
-	"moonshotai/Kimi-K2-Instruct",          // huggingface (bench rank 9, 1858ms)
-];
+export { CURATED_CHAIN };
 
 // ── REGEX+SORT DISCOVERY LAYER ────────────────────────────────────────
 

@@ -8,7 +8,7 @@
  * /recap-blacklist add command).
  *
  * Bootstrap: on first ever load (no file exists), `seedBlacklist()` writes
- * the hardcoded SEED list. After that the file is the source of truth.
+ * the BLACKLIST_SEED from pi-bench. After that the file is the source of truth.
  * `resetBlacklist()` writes an empty `entries: []` and does NOT re-bootstrap
  * from SEED -- the user explicitly asked for empty.
  *
@@ -20,6 +20,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { homedir } from "node:os";
 import { logDebug, logError } from "../util/log.js";
+import { BLACKLIST_SEED } from "pi-bench";
 
 export interface BlacklistEntry {
 	id: string;
@@ -32,33 +33,6 @@ export interface Blacklist {
 	version: 1;
 	entries: BlacklistEntry[];
 }
-
-interface SeedSpec {
-	id: string;
-	reason: string;
-}
-
-/**
- * Hardcoded seed: the 14 known-bad models from the v5 bench. Applied once
- * on first load (no file exists). After that the user / picker can mutate
- * freely; we never re-bootstrap from SEED unless /recap-blacklist seed runs.
- */
-const SEED: ReadonlyArray<SeedSpec> = [
-	{ id: "gemini-1.5-flash", reason: "404 endpoint retired" },
-	{ id: "gemini-1.5-flash-8b", reason: "404 endpoint retired" },
-	{ id: "gemini-2.0-flash", reason: "404 endpoint retired" },
-	{ id: "gemini-2.0-flash-lite", reason: "404 endpoint retired" },
-	{ id: "gemini-2.5-flash-lite-preview-09-2025", reason: "404 preview decommissioned" },
-	{ id: "moonshotai/Kimi-K2-Thinking", reason: "empty + reasoning" },
-	{ id: "zai-org/GLM-4.7-Flash", reason: "empty + reasoning" },
-	{ id: "moonshotai/Kimi-K2.6", reason: "empty + reasoning" },
-	{ id: "moonshotai/Kimi-K2-Instruct-0905", reason: "empty + reasoning" },
-	{ id: "zai-org/GLM-4.7", reason: "400 status code" },
-	{ id: "zai-org/GLM-5.1", reason: "empty + reasoning" },
-	{ id: "nvidia/nemotron-nano-9b-v2:free", reason: "empty + reasoning" },
-	{ id: "nvidia/nemotron-nano-12b-v2-vl:free", reason: "empty + reasoning" },
-	{ id: "deepseek-ai/DeepSeek-V3.2", reason: "empty + reasoning" },
-];
 
 /**
  * Locate the blacklist file. Mirrors util/log.ts's resolution strategy so
@@ -142,7 +116,7 @@ function writeToDisk(b: Blacklist): void {
 
 /**
  * Load the blacklist into the module-level cache. On a brand-new install
- * (no file), seeds with SEED and writes immediately so the user can inspect
+ * (no file), seeds with BLACKLIST_SEED and writes immediately so the user can inspect
  * /Users/.../state/blacklist.json after the first session_start.
  */
 export function loadBlacklist(): Blacklist {
@@ -201,7 +175,7 @@ export function removeFromBlacklist(id: string): boolean {
 }
 
 /**
- * Hard-reset: write an empty list. Does NOT re-apply SEED; the user
+ * Hard-reset: write an empty list. Does NOT re-apply BLACKLIST_SEED; the user
  * asked for empty, so empty is what we give them. They can run
  * /recap-blacklist seed to bring it back.
  */
@@ -211,15 +185,14 @@ export function resetBlacklist(): void {
 }
 
 /**
- * Apply SEED idempotently. Existing entries are kept (we don't overwrite
- * a user-added entry sharing an id with a SEED entry). Used for the
- * first-session bootstrap path and the /recap-blacklist seed command.
+ * Apply BLACKLIST_SEED from pi-bench idempotently. Existing entries are kept.
+ * Used for the first-session bootstrap path and the /recap-blacklist seed command.
  */
 export function seedBlacklist(): void {
 	const current = cache ?? readFromDisk() ?? { version: 1, entries: [] };
 	const knownIds = new Set(current.entries.map((e) => e.id));
 	const additions: BlacklistEntry[] = [];
-	for (const spec of SEED) {
+	for (const spec of BLACKLIST_SEED) {
 		if (knownIds.has(spec.id)) continue;
 		additions.push({
 			id: spec.id,
