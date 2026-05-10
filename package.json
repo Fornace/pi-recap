@@ -1,0 +1,21 @@
+{
+  "name": "pi-recap",
+  "version": "0.7.0",
+  "description": "Session at a glance. Focus a tab to see your goal and the last few turns. Stop scrolling back to remember what you were doing.",
+  "license": "MIT",
+  "author": "Francesco",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/fornace/pi-recap.git"
+  },
+  "keywords": ["pi", "pi-coding-agent", "extension", "recap", "session-summary", "tui"],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.2",
+    "typescript": "^6.0.3"
+  }
+}
