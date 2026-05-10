@@ -1,31 +1,54 @@
 {
   "name": "pi-recap",
-  "version": "0.8.0",
-  "description": "Session at a glance. Focus a tab to see your goal and the last few turns. Stop scrolling back to remember what you were doing.",
+  "version": "0.8.1",
+  "description": "Session at a glance. Always-visible recap panel for pi coding agent showing goal and last few turns.",
+  "author": "Francesco Frapporti <effedue@gmail.com>",
   "license": "MIT",
-  "author": "Francesco",
+  "type": "module",
+  "homepage": "https://github.com/Fornace/pi-recap#readme",
   "repository": {
     "type": "git",
-    "url": "https://github.com/fornace/pi-recap.git"
+    "url": "git+https://github.com/Fornace/pi-recap.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Fornace/pi-recap/issues"
   },
   "keywords": [
     "pi",
+    "pi-package",
+    "pi-extension",
     "pi-coding-agent",
-    "extension",
     "recap",
     "session-summary",
     "tui"
+  ],
+  "files": [
+    "index.ts",
+    "state",
+    "subagent",
+    "ui",
+    "util",
+    "README.md",
+    "LICENSE"
   ],
   "pi": {
     "extensions": [
       "./index.ts"
     ]
   },
-  "devDependencies": {
-    "@types/node": "^25.6.2",
-    "typescript": "^6.0.3"
-  },
   "dependencies": {
     "pi-bench": "^0.2.1"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "@types/node": "^25.6.2",
+    "typescript": "^6.0.3"
   }
 }

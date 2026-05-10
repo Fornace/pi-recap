@@ -1,5 +1,7 @@
 # pi-recap
 
+![pi-recap banner](https://fcskjxapefiqdclrvbtw.supabase.co/storage/v1/object/public/assets/pi-packages/pi-recap-banner.jpg)
+
 **Session at a glance.** An always-visible recap panel for [pi coding agent](https://github.com/earendil-works/pi-coding-agent) that shows your session goal and the last few turns above the editor — no scrolling back to remember what you were doing.
 
 ![pi-recap screenshot](_tmp/screenshot.png)
