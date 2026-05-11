@@ -1,5 +1,7 @@
 /**
- * pi-recap - Pi extension.
+ * ┌─┐┬   ┬─┐┌─┐┌─┐┌─┐
+ * ├─┘│───├┬┘├┤ │  ├─┤├─┘
+ * ┴  ┴   ┴└─└─┘└─┘┴ ┴┴
  *
  * Always-visible recap panel above the editor: session goal + last few turns,
  * each with a timestamp and a "you"/"pi" prefix tag. Focus a tab and the
