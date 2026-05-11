@@ -24,7 +24,9 @@
   ],
   "files": [
     "index.ts",
-    "state",
+    "state/*.ts",
+    "state/*.js",
+    "state/blacklist.json",
     "subagent",
     "ui",
     "util",
