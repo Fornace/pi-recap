@@ -2,3 +2,4 @@ node_modules/
 _tmp/
 state/blacklist.json
 generated/
+state/config.json

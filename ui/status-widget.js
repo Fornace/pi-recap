@@ -75,9 +75,17 @@ const BORDER = {
 export class StatusWidget {
     uiCtx;
     widgetRegistered = false;
+    firstDeltaAfterRegistration = true;
     tui;
     currentTheme;
     disposed = false;
+    /** The component that had focus before we stole it (typically the host
+     *  editor). Captured in toggleFocus() and restored in releaseFocus().
+     *  pi-tui's `focusedComponent` is private in TS but reachable at runtime —
+     *  we read it via a small cast. setFocus(null) cannot be used as a release
+     *  because the editor isn't reachable any other way and goes unfocused
+     *  forever, swallowing all keystrokes. */
+    previousFocus = null;
     focused = false;
     scrollOffset = 0;
     selectedRow = VIEW_SIZE - 1;
@@ -98,6 +106,10 @@ export class StatusWidget {
     /** Transient bench progress lines. When set, the widget interior shows
      *  bench progress/results instead of normal recap rows. */
     benchLines;
+    /** When true and there's no recap history, show a setup invitation
+     *  in the widget interior asking the user to run /recap. Cleared
+     *  automatically once the user configures a recap model. */
+    setupNeeded = false;
     /** Per-instance render counter. Drives the decoy-row width so the decoy
      *  changes whenever the widget height changes (new history entry arrives).
      *  pi-tui diffs frames by string equality per row index — a changing
@@ -108,6 +120,10 @@ export class StatusWidget {
     decoyTick = 0;
     /** Last render's history length. Used to detect height changes. */
     lastHistoryLength = 0;
+    /** When true, render() returns [] so the widget disappears while a
+     *  custom UI overlay (e.g. pi-bench's Select) is active. Prevents the
+     *  animation timer from painting stale frames over the overlay. */
+    renderingPaused = false;
     // ── Lifecycle wiring (called from index.ts) ───────────────────────
     setUICtx(ctx) {
         if (ctx !== this.uiCtx) {
@@ -115,6 +131,10 @@ export class StatusWidget {
             this.widgetRegistered = false;
             this.tui = undefined;
         }
+        // Always reset rendering pause on new session — the widget is reused
+        // across sessions (??= in session_start), and a previous session may
+        // have ended while the bench overlay was active.
+        this.renderingPaused = false;
     }
     /** Whether the widget currently has keyboard focus. */
     get isFocused() {
@@ -137,7 +157,18 @@ export class StatusWidget {
             this.widgetRegistered = true;
         }
         else {
-            this.tui?.requestRender();
+            // On the very first delta after registration, force a full redraw
+            // to clear pi-tui's frame cache. This prevents the stale initial
+            // frame (empty widget) from remaining visible as a ghost top border
+            // when content arrives. Subsequent updates use normal incremental
+            // rendering for performance.
+            if (this.firstDeltaAfterRegistration) {
+                this.firstDeltaAfterRegistration = false;
+                this.tui?.requestRender(true);
+            }
+            else {
+                this.tui?.requestRender();
+            }
         }
         this.ensureAnimTimer();
     }
@@ -146,6 +177,34 @@ export class StatusWidget {
     setBenchProgress(lines) {
         this.benchLines = lines;
         this.update();
+    }
+    /** Called by index.ts on session_start when no recap model is configured.
+     *  Shows a setup invitation in the widget interior. Auto-clears once the
+     *  user configures a recap model (modelOverride or lastModel). */
+    setSetupNeeded(needed) {
+        this.setupNeeded = needed;
+        this.update();
+    }
+    /** Temporarily stop rendering. Returns [] from render() so the widget
+     *  disappears while a custom UI overlay (e.g. pi-bench's Select) is
+     *  active. Call resumeRendering() after the overlay is dismissed.
+     *  Also clears benchLines so there's no intermediate render with
+     *  stale bench content between pause and overlay appearance. */
+    pauseRendering() {
+        this.renderingPaused = true;
+        this.benchLines = undefined;
+        this.stopAnimTimer();
+        this.stopSlowTimer();
+        // Force a full redraw so the last widget frame is cleared from the
+        // terminal before the overlay paints.
+        this.tui?.requestRender(true);
+    }
+    /** Resume rendering after a pause (e.g. after the overlay is dismissed).
+     *  Just clears the flag — does NOT call update(). The next natural render
+     *  cycle (from a state change, streaming delta, or slow timer) will bring
+     *  the widget back. This avoids racing with overlay dismissal. */
+    resumeRendering() {
+        this.renderingPaused = false;
     }
     /** Bound to the ctrl+shift+r shortcut. Toggles focus. Snap, never animate. */
     toggleFocus() {
@@ -158,13 +217,25 @@ export class StatusWidget {
             this.focused = true;
             this.scrollOffset = 0;
             this.selectedRow = Math.min(VIEW_SIZE - 1, history.length - 1);
+            // Capture the current focus target (typically the host editor) so
+            // releaseFocus() can hand it back. TUI.focusedComponent is private
+            // in the TS surface but a plain field at runtime.
+            this.previousFocus = this.tui.focusedComponent;
             this.tui.setFocus(this);
         }
         else {
-            this.focused = false;
-            this.tui.setFocus(null);
+            this.releaseFocus();
         }
         this.tui.requestRender();
+    }
+    /** Release keyboard focus and hand it back to whatever was focused before
+     *  the widget grabbed it (the editor in normal interactive mode). Never
+     *  call setFocus(null) here — that leaves the TUI with no focused
+     *  component and the editor never receives keystrokes again. */
+    releaseFocus() {
+        this.focused = false;
+        this.tui?.setFocus(this.previousFocus);
+        this.previousFocus = null;
     }
     dispose() {
         // Reentry guard: setExtensionWidget(undefined) in pi-host calls back
@@ -173,6 +244,7 @@ export class StatusWidget {
         if (this.disposed)
             return;
         this.disposed = true;
+        this.renderingPaused = false;
         this.stopAnimTimer();
         this.stopSlowTimer();
         const ctx = this.uiCtx;
@@ -195,6 +267,10 @@ export class StatusWidget {
         // Rounded card needs at least the two corners + 1 cell of horizontal
         // payload between them. Below that we just emit nothing.
         if (width < 4)
+            return [];
+        // Paused while a custom UI overlay (e.g. pi-bench's Select) is
+        // active, so the animation timer can't paint stale frames over it.
+        if (this.renderingPaused)
             return [];
         const state = getActiveState();
         const { goal, history } = state;
@@ -255,6 +331,26 @@ export class StatusWidget {
             lines.push(this.renderBottomBorder(theme, width, history.length));
             return lines;
         }
+        // Setup invitation: show when no recap model is configured, regardless
+        // of whether recap history exists. The user can run /recap → Benchmark
+        // to pick the fastest model, or /recap → Model to choose manually.
+        // Auto-clears once modelOverride or lastModel is set.
+        if (this.setupNeeded && !state.modelOverride && !state.lastModel) {
+            const setupLines = [
+                theme.fg("accent", "Finish setup: run /recap to pick your recap model"),
+                theme.fg("warning", "⚡ Use Benchmark for the best pick"),
+            ];
+            setupLines.forEach((line) => {
+                const truncated = line.length > innerWidth ? line.slice(0, innerWidth - 1) + "…" : line;
+                const padded = truncated + " ".repeat(Math.max(0, innerWidth - truncated.length));
+                lines.push(this.padRow(theme, width, padded));
+            });
+            for (let i = setupLines.length; i < VIEW_SIZE; i++) {
+                lines.push(this.padRow(theme, width, ""));
+            }
+            lines.push(this.renderBottomBorder(theme, width, history.length));
+            return lines;
+        }
         const total = history.length;
         const maxOffset = Math.max(0, total - VIEW_SIZE);
         if (this.scrollOffset > maxOffset)
@@ -265,7 +361,13 @@ export class StatusWidget {
         if (visible.length === 0) {
             // Empty interior: render one blank padded row so the card has a
             // vertical body even before the first turn.
-            lines.push(this.padRow(theme, width, ""));
+            if (state.modelWarning) {
+                lines.push(this.padRow(theme, width, theme.fg("warning", state.modelWarning)));
+                lines.push(this.padRow(theme, width, theme.fg("warning", "Use /recap to run the benchmark and pick another.")));
+            }
+            else {
+                lines.push(this.padRow(theme, width, ""));
+            }
         }
         else {
             visible.forEach((entry, i) => {
@@ -284,6 +386,10 @@ export class StatusWidget {
                 }
                 lines.push(this.padRow(theme, width, interior));
             });
+            if (state.modelWarning) {
+                lines.push(this.padRow(theme, width, theme.fg("warning", state.modelWarning)));
+                lines.push(this.padRow(theme, width, theme.fg("warning", "Use /recap to run the benchmark and pick another.")));
+            }
         }
         lines.push(this.renderBottomBorder(theme, width, total));
         return lines;
@@ -293,14 +399,12 @@ export class StatusWidget {
             return;
         const total = getActiveState().history.length;
         if (total === 0) {
-            this.focused = false;
-            this.tui?.setFocus(null);
+            this.releaseFocus();
             this.tui?.requestRender();
             return;
         }
         if (matchesKey(data, Key.ctrlShift("r")) || matchesKey(data, Key.escape)) {
-            this.focused = false;
-            this.tui?.setFocus(null);
+            this.releaseFocus();
             this.tui?.requestRender();
             return;
         }

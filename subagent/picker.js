@@ -73,6 +73,18 @@ export function findFastModelChain(registry, preferredId, sessionModel, cachedWi
         const target = byId.get(preferredId);
         if (target)
             push(target);
+        else {
+            // Fallback: resolve bench CSV bare handle (e.g. "claude-haiku-4.5")
+            // to pi-ai registry ID (e.g. "anthropic.claude-haiku-4-5-20251001-v1:0").
+            // Handles dot→dash normalization and provider-prefix suffix matching.
+            const normalized = preferredId.replace(/\./g, "-");
+            const resolved = available.find((m) => m.id === normalized ||
+                m.id.endsWith("." + normalized) ||
+                m.id.endsWith("." + preferredId) ||
+                m.id.endsWith("-" + preferredId));
+            if (resolved)
+                push(resolved);
+        }
     }
     // Layer 2: cached winner with 24h TTL. Skip if expired or blacklisted.
     if (isCachedModelFresh(cachedWinner, now) && cachedWinner) {
@@ -89,6 +101,16 @@ export function findFastModelChain(registry, preferredId, sessionModel, cachedWi
         const m = byId.get(id);
         if (m)
             push(m);
+        else {
+            // Fallback: resolve bare handle to registry ID.
+            const normalized = id.replace(/\./g, "-");
+            const resolved = available.find((a) => a.id === normalized ||
+                a.id.endsWith("." + normalized) ||
+                a.id.endsWith("." + id) ||
+                a.id.endsWith("-" + id));
+            if (resolved && !isBlacklisted(resolved.id))
+                push(resolved);
+        }
     }
     // Layer 4: sessionModel. Never blacklisted; sacred.
     if (sessionModel)

@@ -56,6 +56,7 @@ import {
 	updateEntryText,
 } from "./state/store.js";
 import { replayFromBranch } from "./state/replay.js";
+import { getGlobalModelOverride, setGlobalModelOverride } from "./state/config.js";
 import { StatusWidget } from "./ui/status-widget.js";
 import {
 	generateUserRecap,
@@ -141,6 +142,35 @@ function persistState(sessionId: string, pi: ExtensionAPI): void {
 }
 
 /**
+ * Resolve a bench CSV bare handle (e.g. "claude-haiku-4.5") to a pi-ai
+ * registry model ID (e.g. "anthropic.claude-haiku-4-5-20251001-v1:0").
+ *
+ * The bench CSV uses bare handles while pi-ai uses provider-prefixed IDs.
+ * This helper bridges the gap by trying exact match first, then falling
+ * back to dot→dash normalization and suffix matching.
+ *
+ * Returns the resolved registry ID, or undefined if no match is found.
+ */
+function resolveModelId(
+	bareHandle: string,
+	registry: { getAvailable(): Array<{ id: string }> },
+): string | undefined {
+	const available = registry.getAvailable();
+	// Exact match first.
+	if (available.some((m) => m.id === bareHandle)) return bareHandle;
+	// Normalize dots to dashes ("claude-haiku-4.5" → "claude-haiku-4-5").
+	const normalized = bareHandle.replace(/\./g, "-");
+	const normMatch = available.find((m) => m.id === normalized || m.id.endsWith("." + normalized));
+	if (normMatch) return normMatch.id;
+	// Suffix match: registry ID ends with ".bareHandle" or "-bareHandle".
+	const suffixMatch = available.find(
+		(m) => m.id.endsWith("." + bareHandle) || m.id.endsWith("-" + bareHandle),
+	);
+	if (suffixMatch) return suffixMatch.id;
+	return undefined;
+}
+
+/**
  * Fire the session-start toast in the title-right slot. Picks the picker's
  * likely first attempt at this exact moment so the toast is honest. Falls
  * back gracefully if the picker would land on nothing (no notice fires).
@@ -179,6 +209,12 @@ export default function (pi: ExtensionAPI) {
 		const sessionId = sid(ctx);
 		setActiveSessionId(sessionId);
 		replaceState(sessionId, replayFromBranch(ctx));
+		let replayed = getState(sessionId);
+		const globalOverride = getGlobalModelOverride();
+		if (!replayed.modelOverride && globalOverride) {
+			commitState(sessionId, { ...replayed, modelOverride: globalOverride });
+			persistState(sessionId, pi);
+		}
 
 		// Bootstrap the blacklist file on first ever session_start. seedBlacklist()
 		// is idempotent: subsequent calls won't duplicate entries.
@@ -194,6 +230,15 @@ export default function (pi: ExtensionAPI) {
 			// Do NOT register the widget yet — wait for before_agent_start.
 			// This prevents the recap box from appearing twice during pi-tui's
 			// startup sequence (once during MCP bridge output, once after extensions list).
+
+			// If we just loaded a global override into the session state,
+			// fire an update so the widget sees it before the notice fires.
+			if (!replayed.modelOverride && globalOverride) {
+				statusWidget.update();
+			}
+
+			// Fire the notice AFTER the global override is committed so it
+			// reads the correct modelOverride (not the stale replayed state).
 			fireSessionStartNotice(sessionId, ctx);
 			// statusWidget.update() deferred to before_agent_start
 
@@ -213,79 +258,12 @@ export default function (pi: ExtensionAPI) {
 			}
 		}
 
-		// Auto-run bench on first use: no model override, no last model, no prior bench results.
+		// No recap model configured — invite the user to finish setup.
+		// Run /recap → "Benchmark" for the best pick, or
+		// /recap → "Model" to choose manually.
 		const state = getState(sessionId);
 		if (!state.modelOverride && !state.lastModel) {
-			const benchScript = path.join(
-				path.dirname(fileURLToPath(import.meta.resolve("pi-bench/package.json"))),
-				"bench.mts",
-			);
-			const outputDir = path.dirname(benchScript);
-			const csvPath = path.join(outputDir, "bench-results-v6.csv");
-			if (!fs.existsSync(csvPath)) {
-				// First run — kick off bench in background.
-				const benchLines: string[] = ["First run — benchmarking to pick your recap model…"];
-				statusWidget?.setBenchProgress(benchLines);
-				let benchTotal = 0;
-				const child = spawn("npx", ["-y", "-p", "tsx", "tsx", benchScript, "--output-dir", outputDir], {
-					stdio: ["ignore", "pipe", "pipe"],
-					env: process.env,
-					cwd: outputDir,
-				});
-				child.stdout.on("data", (chunk) => {
-					const lines = chunk.toString().split("\n");
-					for (const raw of lines) {
-						const line = raw.trim();
-						if (!line) continue;
-						if (line.includes("probing")) {
-							benchLines.push(line.replace(/^\[bench\]\s*/, ""));
-							statusWidget?.setBenchProgress(benchLines);
-						}
-						if (line.includes("->")) {
-							benchTotal++;
-							const short = line.replace(/^\[bench\]\s*\[\S+\]\s*/, "");
-							const cidx = benchLines.findIndex((l) => l.startsWith("⟳ "));
-							if (cidx >= 0) benchLines.splice(cidx, 1);
-							benchLines.push(short);
-							const results = benchLines.filter((l) => !l.startsWith("⟳ "));
-							benchLines.length = 0;
-							benchLines.push("First run — benchmarking…");
-							benchLines.push(...results.slice(-3));
-							benchLines.push(`⟳ ${benchTotal} models tested`);
-							statusWidget?.setBenchProgress([...benchLines]);
-						}
-					}
-				});
-				child.on("close", async (code) => {
-					if (code !== 0) {
-						statusWidget?.setBenchProgress(undefined);
-						return;
-					}
-					if (!fs.existsSync(csvPath)) {
-						statusWidget?.setBenchProgress(undefined);
-						return;
-					}
-					// Auto-pick fastest from CSV.
-					const csv = fs.readFileSync(csvPath, "utf8");
-					const csvLines = csv.split("\n").filter((l) => l.trim());
-					const header = csvLines[0]!;
-					const cols = header.split(",");
-					const idxId = cols.indexOf("id");
-					const firstRow = csvLines[1];
-					if (firstRow) {
-						const fastestId = firstRow.split(",")[idxId];
-						if (fastestId) {
-							commitState(sessionId, { ...getState(sessionId), modelOverride: fastestId });
-							persistState(sessionId, pi);
-							statusWidget?.setBenchProgress(undefined);
-							statusWidget?.update();
-							ctx.ui.notify(`Auto-selected fastest recap model: ${fastestId}`, "info");
-						}
-					}
-					statusWidget?.setBenchProgress(undefined);
-				});
-				setTimeout(() => { child.kill("SIGTERM"); }, 35_000);
-			}
+			statusWidget?.setSetupNeeded(true);
 		}
 	});
 
@@ -367,7 +345,9 @@ export default function (pi: ExtensionAPI) {
 				statusWidget?.update();
 			} catch (err) {
 				logError("user recap failed:", err);
-				removeEntry(sessionId, entryId);
+				updateEntryText(sessionId, entryId, "⚠️ Recap failed. Use /recap to pick another model. (For best results, use the benchmark)");
+				finalizeEntry(sessionId, entryId, "⚠️ Recap failed. Use /recap to pick another model. (For best results, use the benchmark)", before.modelOverride || "error");
+				persistState(sessionId, pi);
 				statusWidget?.update();
 			}
 		})();
@@ -449,8 +429,8 @@ export default function (pi: ExtensionAPI) {
 		statusWidget?.update();
 
 		void (async () => {
+			const beforeAgent = getState(sessionId);
 			try {
-				const beforeAgent = getState(sessionId);
 				const { result, cachedWinnerCleared } = await generateAgentRecap(
 					event.messages,
 					ctx.modelRegistry,
@@ -476,7 +456,9 @@ export default function (pi: ExtensionAPI) {
 				statusWidget?.update();
 			} catch (err) {
 				logError("agent recap failed:", err);
-				removeEntry(sessionId, entryId);
+				updateEntryText(sessionId, entryId, "⚠️ Recap failed. Use /recap to pick another model. (For best results, use the benchmark)");
+				finalizeEntry(sessionId, entryId, "⚠️ Recap failed. Use /recap to pick another model. (For best results, use the benchmark)", beforeAgent.modelOverride || "error");
+				persistState(sessionId, pi);
 				statusWidget?.update();
 			}
 		})();
@@ -572,17 +554,19 @@ export default function (pi: ExtensionAPI) {
 				const picked = await ctx.ui.select("Recap model", fastList);
 				if (!picked) return;
 				commitState(sessionId, { ...getState(sessionId), modelOverride: picked });
+				setGlobalModelOverride(picked);
 				persistState(sessionId, pi);
 				statusWidget?.update();
-				ctx.ui.notify(`Recap model set: ${picked}`, "info");
+				ctx.ui.notify(`Recap model set globally: ${picked}`, "info");
 				return;
 			}
 
 			if (choice === clearModelLabel) {
 				commitState(sessionId, { ...getState(sessionId), modelOverride: undefined });
+				setGlobalModelOverride(undefined);
 				persistState(sessionId, pi);
 				statusWidget?.update();
-				ctx.ui.notify("Recap model reset to auto-pick.", "info");
+				ctx.ui.notify("Recap model reset globally to auto-pick.", "info");
 				return;
 			}
 
@@ -665,17 +649,22 @@ export default function (pi: ExtensionAPI) {
 						return;
 					}
 
-					statusWidget?.setBenchProgress(undefined);
+					statusWidget?.pauseRendering();
 					const picked = await showBenchmarkUI(ctx, csvPath, "Pick recap model");
+					statusWidget?.resumeRendering();
 					if (!picked) return;
 					
-					const modelId = picked;
+					// Resolve the bench CSV bare handle (e.g. "claude-haiku-4.5") to
+					// the pi-ai registry ID (e.g. "anthropic.claude-haiku-4-5-20251001-v1:0").
+					// Falls back to the bare handle if no registry match is found.
+					const modelId = resolveModelId(picked, ctx.modelRegistry) || picked;
 					commitState(sessionId, { ...getState(sessionId), modelOverride: modelId });
+					setGlobalModelOverride(modelId);
 					persistState(sessionId, pi);
 					statusWidget?.update();
-					ctx.ui.notify(`Recap model: ${modelId}`, "info");
+					ctx.ui.notify(`Recap model set globally: ${modelId}`, "info");
 				} catch (err) {
-					statusWidget?.setBenchProgress(undefined);
+					statusWidget?.resumeRendering();
 					logError("bench failed:", err);
 					ctx.ui.notify(`Bench failed: ${err instanceof Error ? err.message : String(err)}`, "warning");
 				}

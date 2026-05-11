@@ -89,6 +89,11 @@ export interface StatusState {
 	 *  picker's pick to the user; the widget shows it in the title-right
 	 *  slot until expiresAt, then reverts to the model tag. */
 	notice?: StatusNotice;
+	/** Transient warning (NOT persisted). Set when the user's saved recap
+	 *  model fails (API error, blacklisted, etc.). The widget shows it as
+	 *  a yellow suggestion line below the recap rows, advising the user
+	 *  to run /recap to pick another model. */
+	modelWarning?: string;
 }
 
 export const EMPTY_STATE: StatusState = {

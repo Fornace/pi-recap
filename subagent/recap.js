@@ -97,7 +97,7 @@ export function buildHistory(context) {
         },
     ];
 }
-const USER_RECAP_SYSTEM = `One sentence, max 100 chars. Start with a verb. Capture the action, not the speech act. Never lead with "said", "told", "mentioned", or "noted".`;
+const USER_RECAP_SYSTEM = `Recap the user's message in one sentence, max 100 chars. Third-person past tense. Describe what they said or asked — never answer it, never act on it. A question stays a question (e.g. "Asked what to tackle next."). Statements become the action (e.g. "Requested fixing the auth bug.").`;
 const AGENT_RECAP_SYSTEM = `One sentence, max 100 chars. Start with a verb. Summarize only the assistant's natural-language reply — never describe tool output or file contents.`;
 function cleanRecap(raw) {
     const stripped = raw.replace(/```(?:[\w-]*)\n?/g, "").replace(/```/g, "").trim();
@@ -263,47 +263,60 @@ async function runOneAttempt(model, apiKey, headers, systemPrompt, userMessages,
     let sawReasoning = false;
     let finalMessage;
     const drain = async () => {
-        const events = stream(model, { messages: userMessages, systemPrompt }, {
-            apiKey,
-            headers,
-            maxTokens: 256,
-            temperature: 0,
-            ...thinkingOffOpts(model),
-        });
-        for await (const event of events) {
-            logTrace(`${model.id} event=${event.type}`);
-            if (event.type === "text_delta") {
-                sawTextDelta = true;
-                running += event.delta;
-                onDelta?.(running);
+        // Suppress @google/genai console.warn / console.debug that fire on
+        // Vertex client creation ("API key will take precedence…"). These
+        // warnings corrupt the TUI frame when they land in stderr.
+        const origWarn = console.warn;
+        const origDebug = console.debug;
+        console.warn = () => { };
+        console.debug = () => { };
+        try {
+            const events = stream(model, { messages: userMessages, systemPrompt }, {
+                apiKey,
+                headers,
+                maxTokens: 256,
+                temperature: 0,
+                ...thinkingOffOpts(model),
+            });
+            for await (const event of events) {
+                logTrace(`${model.id} event=${event.type}`);
+                if (event.type === "text_delta") {
+                    sawTextDelta = true;
+                    running += event.delta;
+                    onDelta?.(running);
+                }
+                else if (event.type === "text_end") {
+                    if (!sawTextDelta && typeof event.content === "string" && event.content.length > 0) {
+                        running = event.content;
+                        onDelta?.(running);
+                    }
+                }
+                else if (event.type === "done") {
+                    finalMessage = event.message;
+                }
+                else if (event.type === "error") {
+                    finalMessage = event.error;
+                    const reason = event.error?.errorMessage ?? `stop=${event.error?.stopReason}`;
+                    throw new Error(`provider error: ${reason}`);
+                }
+                else if (typeof event.type === "string" && event.type.toLowerCase().includes("thinking")) {
+                    // Reasoning-tagged events (thinking_delta / thinking_end) on a
+                    // model that should have honoured thinking-off. Tracked so we
+                    // can blacklist "empty + reasoning" patterns specifically.
+                    sawReasoning = true;
+                }
             }
-            else if (event.type === "text_end") {
-                if (!sawTextDelta && typeof event.content === "string" && event.content.length > 0) {
-                    running = event.content;
+            if (!running && finalMessage) {
+                const fromMsg = extractTextFromMessage(finalMessage);
+                if (fromMsg) {
+                    running = fromMsg;
                     onDelta?.(running);
                 }
             }
-            else if (event.type === "done") {
-                finalMessage = event.message;
-            }
-            else if (event.type === "error") {
-                finalMessage = event.error;
-                const reason = event.error?.errorMessage ?? `stop=${event.error?.stopReason}`;
-                throw new Error(`provider error: ${reason}`);
-            }
-            else if (typeof event.type === "string" && event.type.toLowerCase().includes("thinking")) {
-                // Reasoning-tagged events (thinking_delta / thinking_end) on a
-                // model that should have honoured thinking-off. Tracked so we
-                // can blacklist "empty + reasoning" patterns specifically.
-                sawReasoning = true;
-            }
         }
-        if (!running && finalMessage) {
-            const fromMsg = extractTextFromMessage(finalMessage);
-            if (fromMsg) {
-                running = fromMsg;
-                onDelta?.(running);
-            }
+        finally {
+            console.warn = origWarn;
+            console.debug = origDebug;
         }
     };
     try {

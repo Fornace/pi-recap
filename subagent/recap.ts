@@ -117,7 +117,7 @@ export function buildHistory(context: string): Message[] {
 	];
 }
 
-const USER_RECAP_SYSTEM = `One sentence, max 100 chars. Start with a verb. Capture the action, not the speech act. Never lead with "said", "told", "mentioned", or "noted".`;
+const USER_RECAP_SYSTEM = `Recap the user's message in one sentence, max 100 chars. Third-person past tense. Describe what they said or asked — never answer it, never act on it. A question stays a question (e.g. "Asked what to tackle next."). Statements become the action (e.g. "Requested fixing the auth bug.").`;
 
 const AGENT_RECAP_SYSTEM = `One sentence, max 100 chars. Start with a verb. Summarize only the assistant's natural-language reply — never describe tool output or file contents.`;
 
