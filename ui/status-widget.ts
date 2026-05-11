@@ -145,6 +145,11 @@ export class StatusWidget implements Component {
 		}
 	}
 
+	/** Whether the widget currently has keyboard focus. */
+	get isFocused(): boolean {
+		return this.focused;
+	}
+
 	/** Called whenever state changes (replay, recap commit, /goal, every
 	 *  delta from a stream). Idempotent: registers the widget once, then
 	 *  just kicks a re-render. */

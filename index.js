@@ -121,6 +121,7 @@ function fireSessionStartNotice(sessionId, ctx) {
 export default function (pi) {
     let statusWidget;
     let decoyInterval;
+    let terminalInputUnsub;
     // ── Session lifecycle ──────────────────────────────────────────
     pi.on("session_start", async (_event, ctx) => {
         const sessionId = sid(ctx);
@@ -137,8 +138,25 @@ export default function (pi) {
         if (ctx.hasUI) {
             statusWidget ??= new StatusWidget();
             statusWidget.setUICtx(ctx.ui);
+            // Do NOT register the widget yet — wait for before_agent_start.
+            // This prevents the recap box from appearing twice during pi-tui's
+            // startup sequence (once during MCP bridge output, once after extensions list).
             fireSessionStartNotice(sessionId, ctx);
-            statusWidget.update();
+            // statusWidget.update() deferred to before_agent_start
+            // Raw Enter listener: bump decoy the moment the user presses Enter,
+            // before pi processes the submit → input event → before_agent_start.
+            // This is the earliest possible hook for clearing orphaned border fragments.
+            // Guards: skip when widget is focused (Enter is for navigation), or when
+            // the keypress is not a bare Enter (\r). We do NOT try to detect open
+            // dialogs — a bump during a dialog is harmless (just a counter increment).
+            if (!terminalInputUnsub) {
+                terminalInputUnsub = ctx.ui.onTerminalInput((data) => {
+                    if (data === "\r" && statusWidget && !statusWidget.isFocused) {
+                        statusWidget.bumpDecoy();
+                    }
+                    return undefined; // pass through — never consume
+                });
+            }
         }
         // Auto-run bench on first use: no model override, no last model, no prior bench results.
         const state = getState(sessionId);
@@ -227,6 +245,8 @@ export default function (pi) {
         statusWidget?.update();
     });
     pi.on("session_shutdown", async (_event, ctx) => {
+        terminalInputUnsub?.();
+        terminalInputUnsub = undefined;
         dropSession(sid(ctx));
         statusWidget?.dispose();
         statusWidget = undefined;
@@ -418,22 +438,25 @@ export default function (pi) {
             const current = getState(sessionId);
             // Build menu with context snippets
             const goalLabel = current.goal
-                ? `goal: ${current.goal.slice(0, 40)}${current.goal.length > 40 ? "…" : ""}${current.goalSource === "manual" ? " (locked)" : ""}`
-                : "goal: not set (auto-derives after first turn)";
+                ? `🎯 Goal: ${current.goal.slice(0, 40)}${current.goal.length > 40 ? "…" : ""}${current.goalSource === "manual" ? " (locked)" : " (auto)"}`
+                : "🎯 Goal: not set (auto-derives after first turn)";
+            const clearGoalLabel = "   └─ Clear goal & resume auto-derive";
             const modelLabel = current.modelOverride
-                ? `model: ${current.modelOverride} (override)`
-                : `model: auto-pick${current.lastModel ? ` (last: ${current.lastModel})` : ""}`;
+                ? `🧠 Model: ${current.modelOverride} (locked)`
+                : `🧠 Model: auto-pick${current.lastModel ? ` (last: ${current.lastModel})` : ""}`;
+            const clearModelLabel = "   └─ Reset model to auto-pick";
+            const benchLabel = "⚡ Benchmark models & pick fastest";
             const bl = loadBlacklist();
-            const blLabel = `blacklist: ${bl.entries.length} entries`;
+            const blLabel = `🚫 Manage Blacklist (${bl.entries.length} items)`;
             const options = [
                 goalLabel,
-                "clear goal",
+                ...(current.goal ? [clearGoalLabel] : []),
                 modelLabel,
-                "clear model",
-                "Benchmark fastest model",
+                ...(current.modelOverride ? [clearModelLabel] : []),
+                benchLabel,
                 blLabel,
             ];
-            const choice = await ctx.ui.select("recap", options);
+            const choice = await ctx.ui.select("Recap Settings", options);
             if (!choice)
                 return; // dismissed
             // ── Goal ────────────────────────────────────────────────
@@ -450,7 +473,7 @@ export default function (pi) {
                 ctx.ui.notify(`Goal locked: ${next}`, "info");
                 return;
             }
-            if (choice === "clear goal") {
+            if (choice === clearGoalLabel) {
                 commitState(sessionId, { ...getState(sessionId), goal: "", goalSource: "auto", goalAutoTurnsApplied: 0 });
                 persistState(sessionId, pi);
                 statusWidget?.update();
@@ -479,7 +502,7 @@ export default function (pi) {
                 ctx.ui.notify(`Recap model set: ${picked}`, "info");
                 return;
             }
-            if (choice === "clear model") {
+            if (choice === clearModelLabel) {
                 commitState(sessionId, { ...getState(sessionId), modelOverride: undefined });
                 persistState(sessionId, pi);
                 statusWidget?.update();
@@ -487,7 +510,7 @@ export default function (pi) {
                 return;
             }
             // ── Bench & pick fastest ─────────────────────────────
-            if (choice === "Benchmark fastest model") {
+            if (choice === benchLabel) {
                 const benchScript = path.join(path.dirname(fileURLToPath(import.meta.resolve("pi-bench/package.json"))), "bench.mts");
                 const outputDir = path.dirname(benchScript);
                 const csvPath = path.join(outputDir, "bench-results-v6.csv");

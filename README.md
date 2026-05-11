@@ -26,7 +26,7 @@ cd ~/.pi/agent/extensions/pi-recap
 npm install
 ```
 
-Restart pi. The recap panel appears above the editor on your next session.
+Restart pi. The recap panel appears above the editor after your first message.
 
 ## Usage
 
@@ -101,3 +101,10 @@ npx tsx test-recap-models.ts     # test model picker chain against real registry
 ## License
 
 MIT
+
+## Changelog
+
+### 0.8.16
+
+- Fixed double-render of the recap panel during pi-tui startup. The widget now registers on first user input (`before_agent_start`) instead of `session_start`, preventing the panel from appearing twice when pi first launches.
+- Added raw Enter keypress listener via `onTerminalInput` to bump the decoy row at the earliest possible moment, before pi processes the submit. This gives maximum time for the decoy to clear orphaned border fragments in scrollback. The listener skips when the recap widget has focus and never consumes the keypress.
