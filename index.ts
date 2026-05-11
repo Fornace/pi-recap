@@ -76,6 +76,7 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { showBenchmarkUI } from "pi-bench/ui.js";
 import { Container, SelectList, Spacer, Text } from "@earendil-works/pi-tui";
 
 // ── Helpers ───────────────────────────────────────────────────────────
@@ -663,145 +664,9 @@ export default function (pi: ExtensionAPI) {
 						ctx.ui.notify("Bench finished but no results found.", "warning");
 						return;
 					}
-					// Parse CSV → all results by latency (CSV is pre-sorted).
-					const csv = fs.readFileSync(csvPath, "utf8");
-					const csvLines = csv.split("\n").filter((l) => l.trim());
-					const header = csvLines[0]!;
-					const cols = header.split(",");
-					const idxId = cols.indexOf("id");
-					const idxProvider = cols.indexOf("provider");
-					const idxLatency = cols.indexOf("t_complete_ms");
-					const idxCost = cols.indexOf("cost_usd");
-					const idxTok = cols.indexOf("output_tokens");
-					const idxQuality = cols.indexOf("quality");
-					const idxReasoned = cols.indexOf("reasoned");
-					const allRows = csvLines.slice(1).filter((l) => {
-						const vals = l.split(",");
-						return vals[idxId] && vals[idxLatency];
-					});
-					if (allRows.length === 0) {
-						statusWidget?.setBenchProgress(undefined);
-						ctx.ui.notify("Bench finished but no models ranked.", "warning");
-						return;
-					}
 
-					// ANSI color helpers.
-					const green = (s: string) => `\x1b[32m${s}\x1b[0m`;
-					const yellow = (s: string) => `\x1b[33m${s}\x1b[0m`;
-					const cyan = (s: string) => `\x1b[36m${s}\x1b[0m`;
-					const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
-					const bold = (s: string) => `\x1b[1m${s}\x1b[0m`;
-
-					// Column widths — tuned for ~80-col terminal.
-					const idW = 32;
-					const provW = 12;
-					const latW = 7;
-					const costW = 11;
-					const tokW = 4;
-					const qualW = 6;
-					const padR = (s: string, w: number) => s.padEnd(w);
-					const padL = (s: string, w: number) => s.padStart(w);
-
-					// Format cost with meaningful precision.
-					const fmtCost = (raw: string): string => {
-						const n = parseFloat(raw);
-						if (isNaN(n) || n === 0) return dim("-");
-						if (n < 0.0001) return `$${n.toFixed(7)}`;
-						if (n < 0.01) return `$${n.toFixed(6)}`;
-						if (n < 1) return `$${n.toFixed(5)}`;
-						return `$${n.toFixed(3)}`;
-					};
-
-					// Build select options — styled table rows.
-					const pickOptions = allRows.map((line, i) => {
-						const v = line.split(",");
-						const id = v[idxId]!.slice(0, idW);
-						const prov = (v[idxProvider] ?? "-").slice(0, provW);
-						const lat = v[idxLatency]!;
-						const cost = fmtCost(v[idxCost] ?? "");
-						const tok = v[idxTok] ?? "-";
-						const qual = (v[idxQuality] ?? "-").slice(0, qualW);
-						const reasoned = v[idxReasoned] === "yes" ? " 🧠" : "";
-
-						const rank = String(i + 1).padStart(3);
-
-						// Color by rank tier.
-						let row: string;
-						if (i === 0) {
-							// 🥇 Winner — bold green.
-							row = bold(green(`👑 ${padR(id, idW)} ${padR(prov, provW)} ${padL(lat + "ms", latW)} ${padL(cost, costW)} ${padL(tok, tokW)} ${qual}${reasoned}`));
-						} else if (i < 3) {
-							// 🥈🥉 Podium — yellow.
-							row = yellow(`${rank} ${padR(id, idW)} ${padR(prov, provW)} ${padL(lat + "ms", latW)} ${padL(cost, costW)} ${padL(tok, tokW)} ${qual}${reasoned}`);
-						} else if (i < 10) {
-							// Top 10 — normal.
-							row = `${rank} ${padR(id, idW)} ${padR(prov, provW)} ${padL(lat + "ms", latW)} ${padL(cost, costW)} ${padL(tok, tokW)} ${qual}${reasoned}`;
-						} else {
-							// Rest — dim.
-							row = dim(`${rank} ${padR(id, idW)} ${padR(prov, provW)} ${padL(lat + "ms", latW)} ${padL(cost, costW)} ${padL(tok, tokW)} ${qual}${reasoned}`);
-						}
-						return row;
-					});
-
-					// Column header for the select dialog.
-					const colHeader = dim(`     ${padR("model", idW)} ${padR("provider", provW)} ${padL("latency", latW)} ${padL("cost", costW)} ${padL("tok", tokW)} quality`);
-
-					// Widget display: full table with header.
-					const summary = bold(`${allRows.length} models tested`) + dim(" · fastest is #1");
-					benchLines.push(summary);
-					benchLines.push(colHeader);
-					benchLines.push(dim("─".repeat(80)));
-					benchLines.push(...pickOptions);
-					statusWidget?.setBenchProgress(benchLines);
-
-					// Select dialog — shows styled rows, scrolls natively using pi-tui SelectList.
-					const picked = await ctx.ui.custom<string | undefined>((tui, theme, keybindings, done) => {
-						class CustomSelect extends Container {
-							private list: SelectList;
-							constructor() {
-								super();
-								const w = tui.terminal.columns > 80 ? 80 : tui.terminal.columns;
-								this.addChild(new Text(theme.fg("dim", "─".repeat(w)), 1, 0));
-								this.addChild(new Spacer(1));
-								this.addChild(new Text(theme.fg("accent", theme.bold(`Pick recap model `)) + theme.fg("dim", `(${allRows.length} tested)`), 1, 0));
-								this.addChild(new Spacer(1));
-								this.addChild(new Text(colHeader, 1, 0));
-
-								const items = pickOptions.map((opt, i) => {
-									const v = allRows[i]!.split(",");
-									const rawId = v[idxId]!;
-									return { value: rawId, label: opt };
-								});
-								
-								this.list = new SelectList(items, 10, {
-									selectedPrefix: () => theme.fg("accent", "→ "),
-									selectedText: (t) => t, // Keep original ANSI styling
-									description: (t) => theme.fg("dim", t),
-									scrollInfo: (t) => theme.fg("dim", t),
-									noMatch: (t) => theme.fg("error", t)
-								});
-								this.addChild(this.list);
-
-								this.addChild(new Spacer(1));
-								this.addChild(new Text("↑↓ navigate  Enter select  Esc cancel", 1, 0));
-								this.addChild(new Spacer(1));
-								this.addChild(new Text(theme.fg("dim", "─".repeat(w)), 1, 0));
-
-								this.list.onSelect = (item) => done(item.value);
-								this.list.onCancel = () => done(undefined);
-							}
-
-							handleInput(keyData: string) {
-								if (keybindings.matches(keyData, "tui.select.cancel")) {
-									done(undefined);
-									return;
-								}
-								this.list.handleInput(keyData);
-							}
-						}
-						return new CustomSelect();
-					});
 					statusWidget?.setBenchProgress(undefined);
+					const picked = await showBenchmarkUI(ctx, csvPath, "Pick recap model");
 					if (!picked) return;
 					
 					const modelId = picked;
