@@ -322,10 +322,15 @@ export class StatusWidget implements Component {
 
 		this.reconcileAnim(history, now);
 
-		// Adaptive slow tick: 1s while any entry is < 60s old (so "now" → "1m"
-		// transitions on time), 30s otherwise to keep minute counters fresh.
-		const hasRecentEntry = history.length > 0 && (now - history[history.length - 1]!.timestamp) < 60_000;
-		this.ensureSlowTimer(hasRecentEntry);
+		// Adaptive slow tick, driven by the newest visible entry (the youngest
+		// timestamp is always the one closest to its next display threshold):
+		//   < 1 min   → 1 s   (so "now" → "1m" flips on time)
+		//   < 1 hour  → 20 s  (so "Xm" → "X+1m" stays roughly fresh)
+		//   ≥ 1 hour  → off   (formatDate is absolute from here on — no need to
+		//                      re-render until state actually changes)
+		const newestAge = history.length > 0 ? now - history[history.length - 1]!.timestamp : Infinity;
+		const slowInterval = newestAge < 60_000 ? 1_000 : newestAge < 3_600_000 ? 20_000 : undefined;
+		this.ensureSlowTimer(slowInterval);
 
 		const lines: string[] = [];
 
@@ -909,12 +914,15 @@ export class StatusWidget implements Component {
 		this.tui?.requestRender(true);
 	}
 
-	/** Adaptive slow tick: every 1s while any entry is < 1 min old (so "now"
-	 *  transitions to "1m" on time), then every 30s to keep older counters
-	 *  fresh. Re-evaluated on every render(). */
-	private ensureSlowTimer(hasRecentEntry: boolean): void {
+	/** Reconcile the slow tick to the interval requested by render(). Pass
+	 *  `undefined` to stop ticking — used once every visible timestamp is
+	 *  absolute and re-renders would just be wasted wakeups. */
+	private ensureSlowTimer(wantInterval: number | undefined): void {
 		if (this.disposed) return;
-		const wantInterval = hasRecentEntry ? 1_000 : 30_000;
+		if (wantInterval === undefined) {
+			this.stopSlowTimer();
+			return;
+		}
 		// If timer exists but at the wrong interval, restart it.
 		if (this.slowTimer && this.slowInterval !== wantInterval) {
 			this.stopSlowTimer();
