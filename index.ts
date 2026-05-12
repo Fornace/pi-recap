@@ -649,6 +649,24 @@ export default function (pi: ExtensionAPI) {
 						return;
 					}
 
+					try {
+						const csvContent = fs.readFileSync(csvPath, "utf8");
+						const csvLines = csvContent.split("\n").filter(l => l.trim());
+						if (csvLines.length < 2) {
+							statusWidget?.setBenchProgress(undefined);
+							ctx.ui.notify("Bench finished but results file is empty.", "warning");
+							return;
+						}
+						const header = csvLines[0]!;
+						if (!header.includes("id")) {
+							statusWidget?.setBenchProgress(undefined);
+							ctx.ui.notify(`Bench failed: incompatible CSV from pi-bench (missing 'id' column). Header: ${header.slice(0, 50)}`, "warning");
+							return;
+						}
+					} catch (e) {
+						// Ignore read errors here, showBenchmarkUI will handle/throw them
+					}
+
 					statusWidget?.pauseRendering();
 					const picked = await showBenchmarkUI(ctx, csvPath, "Pick recap model");
 					statusWidget?.resumeRendering();

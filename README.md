@@ -6,7 +6,9 @@
 
 An always-visible session recap panel for [pi coding agent](https://github.com/badlogic/pi-mono) showing the current goal and last few conversation turns with live streaming updates.
 
-![pi-recap screenshot](_tmp/screenshot.png)
+<video src="assets/demo.mp4" autoplay loop muted playsinline></video>
+If you can't view the video above, here is a fallback GIF version:
+![pi-recap demo](assets/demo.gif)
 
 *Banner and screenshot images created with [pi-banana](https://github.com/fornace/pi-banana).*
 
