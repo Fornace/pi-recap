@@ -1,6 +1,6 @@
 {
   "name": "pi-recap",
-  "version": "0.8.21",
+  "version": "0.8.22",
   "description": "Session recap panel for pi coding agent. Always-visible widget showing the current goal and last few conversation turns with live streaming updates. Auto-selects the fastest, cheapest summarization model using pi-bench benchmark data.",
   "author": "Francesco Frapporti <effedue@gmail.com>",
   "license": "MIT",
