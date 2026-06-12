@@ -46,6 +46,20 @@ import { formatDate } from "../util/date.js";
 import { fgAnsi, parseHex, rgbLerp, RESET, type RGB, newestColor, textColor, colorText, isLightBg } from "./anim.js";
 
 const WIDGET_KEY = "recap";
+
+/** Inside tmux/screen, pi's renderer never destructive-clears and never
+ *  rewraps committed history, so a decoy that changes EVERY render forces all
+ *  rows below the widget to repaint each tick (80 ms) and pushes mid-state
+ *  frames into the pane's scrollback — duplicated status cards and
+ *  progressive tool-row fragments. In multiplexers we only bump the decoy
+ *  when the card height actually changes; external bumpDecoy() calls
+ *  (Enter / input events) still cover vertical shifts. Worst case is an
+ *  occasional in-viewport border fragment, cleared on the next height
+ *  change — far better than continuous scrollback corruption. */
+export const IN_MULTIPLEXER =
+	!!process.env.TMUX ||
+	(process.env.TERM ?? "").startsWith("tmux") ||
+	(process.env.TERM ?? "").startsWith("screen");
 const VIEW_SIZE = 4;
 
 const TICK_MS = 80;
@@ -355,7 +369,9 @@ export class StatusWidget implements Component {
 		// Trade-off: every row below the widget re-renders each tick (80 ms
 		// during animation), which can cause inline images to flash. The
 		// alternative — a ghosted duplicate status box — is worse.
-		this.decoyTick = (this.decoyTick + 1) % 8;
+		if (!IN_MULTIPLEXER || history.length !== this.lastHistoryLength) {
+			this.decoyTick = (this.decoyTick + 1) % 8;
+		}
 		this.lastHistoryLength = history.length;
 		lines.push(" ".repeat(1 + this.decoyTick));
 

@@ -38,6 +38,14 @@ import { clearNotice, getActiveState, getActiveSessionId } from "../state/store.
 import { formatDate } from "../util/date.js";
 import { fgAnsi, parseHex, rgbLerp, RESET, newestColor, textColor, colorText } from "./anim.js";
 const WIDGET_KEY = "recap";
+// Inside tmux/screen, pi's renderer never destructive-clears, so an
+// every-render decoy bump forces all rows below the widget to repaint each
+// tick and commits mid-state frames into scrollback (duplicated cards,
+// progressive tool-row fragments). In multiplexers, bump only on height
+// change; external bumpDecoy() calls still cover vertical shifts.
+export const IN_MULTIPLEXER = !!process.env.TMUX ||
+    (process.env.TERM ?? "").startsWith("tmux") ||
+    (process.env.TERM ?? "").startsWith("screen");
 const VIEW_SIZE = 4;
 const TICK_MS = 80;
 const THINK_GRACE_MS = 200;
@@ -315,7 +323,9 @@ export class StatusWidget {
         // Trade-off: every row below the widget re-renders each tick (80 ms
         // during animation), which can cause inline images to flash. The
         // alternative — a ghosted duplicate status box — is worse.
-        this.decoyTick = (this.decoyTick + 1) % 8;
+        if (!IN_MULTIPLEXER || history.length !== this.lastHistoryLength) {
+            this.decoyTick = (this.decoyTick + 1) % 8;
+        }
         this.lastHistoryLength = history.length;
         lines.push(" ".repeat(1 + this.decoyTick));
         const liveNotice = state.notice && state.notice.expiresAt > now ? state.notice : undefined;

@@ -57,7 +57,7 @@ import {
 } from "./state/store.js";
 import { replayFromBranch } from "./state/replay.js";
 import { getGlobalModelOverride, setGlobalModelOverride } from "./state/config.js";
-import { StatusWidget } from "./ui/status-widget.js";
+import { StatusWidget, IN_MULTIPLEXER } from "./ui/status-widget.js";
 import {
 	generateUserRecap,
 	generateAgentRecap,
@@ -300,11 +300,17 @@ export default function (pi: ExtensionAPI) {
 		// the widget to re-render (clearing orphaned border fragments). The
 		// 100ms interval keeps animating until the assistant starts streaming.
 		statusWidget?.bumpDecoy();
-		// Then keep animating until the assistant starts streaming.
-		decoyInterval = setInterval(() => {
-			statusWidget?.bumpDecoy();
-			statusWidget?.update();
-		}, 100);
+		// Then keep animating until the assistant starts streaming — but NOT in
+		// tmux/screen: there pi never destructive-clears, so the 100ms forced
+		// full-below repaints commit mid-state frames into the pane scrollback
+		// (duplicated cards / progressive tool rows). The single bump above
+		// still covers the submit-time vertical shift.
+		if (!IN_MULTIPLEXER) {
+			decoyInterval = setInterval(() => {
+				statusWidget?.bumpDecoy();
+				statusWidget?.update();
+			}, 100);
+		}
 		return { action: "continue" };
 	});
 
