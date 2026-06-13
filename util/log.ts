@@ -15,19 +15,15 @@
 
 import { appendFileSync, mkdirSync, existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { homedir } from "node:os";
 
 /**
  * Locate the project _tmp directory.
  *
- * tsconfig is set to compile to CommonJS (no `"type": "module"` on package.json),
- * so `import.meta.url` is forbidden by the compiler. Instead we walk a few
- * candidate roots and fall back to the canonical install path under HOME.
- *
  * Candidates (first existing-or-creatable wins):
  *   1. <PI_RECAP_HOME>/_tmp/recap.log if env var is set (escape hatch)
  *   2. <cwd>/_tmp/recap.log when cwd looks like the pi-recap project
- *   3. <HOME>/.pi/agent/extensions/pi-recap/_tmp/recap.log (canonical)
+ *   3. <XDG_STATE_HOME or ~/.local/state>/pi-recap/_tmp/recap.log
+ *   4. <HOME>/.pi/agent/extensions/pi-recap/_tmp/recap.log (legacy)
  */
 function resolveLogPath(): string {
 	const envHome = process.env.PI_RECAP_HOME;
@@ -39,7 +35,18 @@ function resolveLogPath(): string {
 	if (existsSync(resolve(cwd, "package.json")) && cwd.endsWith("pi-recap")) {
 		return cwdCandidate;
 	}
-	return resolve(homedir(), ".pi", "agent", "extensions", "pi-recap", "_tmp", "recap.log");
+	const xdg = process.env.XDG_STATE_HOME && process.env.XDG_STATE_HOME.length > 0
+		? process.env.XDG_STATE_HOME
+		: resolve(process.env.HOME || "", ".local", "state");
+	const xdgCandidate = resolve(xdg, "pi-recap", "_tmp", "recap.log");
+	if (existsSync(xdgCandidate)) {
+		return xdgCandidate;
+	}
+	const legacy = resolve(process.env.HOME || "", ".pi", "agent", "extensions", "pi-recap", "_tmp", "recap.log");
+	if (existsSync(legacy)) {
+		return legacy;
+	}
+	return xdgCandidate;
 }
 
 const LOG_PATH = resolveLogPath();

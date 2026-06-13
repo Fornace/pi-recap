@@ -2,7 +2,7 @@
 
 ## Architecture
 - `pi-recap` is a pi extension that provides AI-powered conversation recaps
-- State persistence is dual: per-branch via `pi.appendEntry("recap", ...)` and global via `~/.pi/agent/extensions/pi-recap/state/config.json`
+- State persistence is dual: per-branch via `pi.appendEntry("recap", ...)` and global via `$XDG_STATE_HOME/pi-recap/state/config.json` (defaults to `~/.local/state/pi-recap/...`; falls back to the legacy `~/.pi/agent/extensions/pi-recap/state/config.json` when present)
 - The StatusWidget renders in the terminal via pi-tui; it's reused across sessions (`??=` in `session_start`)
 
 ## pi-ai model ID format mismatch (CRITICAL)
@@ -27,7 +27,7 @@ To prevent the StatusWidget animation timer from painting over custom UI overlay
 - **Never** call `setBenchProgress(undefined)` immediately before `pauseRendering()` — it triggers a premature `update()` that races with the overlay
 
 ## Global config persistence
-- `state/config.ts` stores global model override in `~/.pi/agent/extensions/pi-recap/state/config.json`
+- `state/config.ts` stores global model override under the XDG state dir (`$XDG_STATE_HOME/pi-recap/state/config.json`, default `~/.local/state/...`), with `PI_RECAP_HOME` override and legacy `~/.pi/...` fallback
 - Loaded on `session_start` if per-branch replay has no modelOverride
 - Saved whenever user picks a model from bench or `/recap` menu
 - `fireSessionStartNotice` must fire AFTER global override commit (reads state, needs fresh modelOverride)

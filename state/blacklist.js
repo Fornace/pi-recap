@@ -17,7 +17,6 @@
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { homedir } from "node:os";
 import { logDebug, logError } from "../util/log.js";
 import { BLACKLIST_SEED } from "pi-bench";
 /**
@@ -25,10 +24,10 @@ import { BLACKLIST_SEED } from "pi-bench";
  * a custom PI_RECAP_HOME points both files at the same _tmp / state dir
  * during e2e tests.
  *
- * Candidates (first wins):
  *   1. <PI_RECAP_HOME>/state/blacklist.json if env var is set
  *   2. <cwd>/state/blacklist.json when cwd looks like the pi-recap project
- *   3. <HOME>/.pi/agent/extensions/pi-recap/state/blacklist.json (canonical)
+ *   3. <XDG_STATE_HOME or ~/.local/state>/pi-recap/state/blacklist.json
+ *   4. <HOME>/.pi/agent/extensions/pi-recap/state/blacklist.json (legacy)
  */
 function resolveBlacklistPath() {
     const envHome = process.env.PI_RECAP_HOME;
@@ -40,7 +39,18 @@ function resolveBlacklistPath() {
     if (existsSync(resolve(cwd, "package.json")) && cwd.endsWith("pi-recap")) {
         return cwdCandidate;
     }
-    return resolve(homedir(), ".pi", "agent", "extensions", "pi-recap", "state", "blacklist.json");
+    const xdg = process.env.XDG_STATE_HOME && process.env.XDG_STATE_HOME.length > 0
+        ? process.env.XDG_STATE_HOME
+        : resolve(process.env.HOME || "", ".local", "state");
+    const xdgCandidate = resolve(xdg, "pi-recap", "state", "blacklist.json");
+    if (existsSync(xdgCandidate)) {
+        return xdgCandidate;
+    }
+    const legacy = resolve(process.env.HOME || "", ".pi", "agent", "extensions", "pi-recap", "state", "blacklist.json");
+    if (existsSync(legacy)) {
+        return legacy;
+    }
+    return xdgCandidate;
 }
 const BLACKLIST_PATH = resolveBlacklistPath();
 export const BLACKLIST_FILE_PATH = BLACKLIST_PATH;

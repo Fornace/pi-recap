@@ -1,6 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { homedir } from "node:os";
 import { logError } from "../util/log.js";
 function resolveConfigPath() {
     const envHome = process.env.PI_RECAP_HOME;
@@ -12,7 +11,18 @@ function resolveConfigPath() {
     if (existsSync(resolve(cwd, "package.json")) && cwd.endsWith("pi-recap")) {
         return cwdCandidate;
     }
-    return resolve(homedir(), ".pi", "agent", "extensions", "pi-recap", "state", "config.json");
+    const xdg = process.env.XDG_STATE_HOME && process.env.XDG_STATE_HOME.length > 0
+        ? process.env.XDG_STATE_HOME
+        : resolve(process.env.HOME || "", ".local", "state");
+    const xdgCandidate = resolve(xdg, "pi-recap", "state", "config.json");
+    if (existsSync(xdgCandidate)) {
+        return xdgCandidate;
+    }
+    const legacy = resolve(process.env.HOME || "", ".pi", "agent", "extensions", "pi-recap", "state", "config.json");
+    if (existsSync(legacy)) {
+        return legacy;
+    }
+    return xdgCandidate;
 }
 const CONFIG_PATH = resolveConfigPath();
 let cache;
