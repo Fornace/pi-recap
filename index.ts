@@ -61,6 +61,7 @@ import { StatusWidget } from "./ui/status-widget.js";
 import {
 	generateUserRecap,
 	generateAgentRecap,
+	extractTextFromMessage,
 	listAvailableFastModels,
 	previewFirstPick,
 } from "./subagent/recap.js";
@@ -89,6 +90,20 @@ const NOTICE_DURATION_MS = 2500;
 /** Extract the session id from the event context. */
 function sid(ctx: { sessionManager: { getSessionId(): string } }): string {
 	return ctx.sessionManager.getSessionId();
+}
+
+/** Text of the last assistant message in an agent turn. Used to dedup the
+ *  agent recap: agent_end can re-fire (or a turn can end with no new natural-
+ *  language reply), and re-summarizing identical text just burns another
+ *  model call for the same line. Empty string means "nothing to recap". */
+function lastAssistantText(messages: readonly unknown[]): string {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const m = messages[i] as { role?: string } | undefined;
+		if (m?.role === "assistant") {
+			return (extractTextFromMessage(m as never) ?? "").trim();
+		}
+	}
+	return "";
 }
 
 /** Single pass over the session branch: returns the trailing window of
@@ -202,6 +217,8 @@ export default function (pi: ExtensionAPI) {
 	let statusWidget: StatusWidget | undefined;
 	let decoyInterval: ReturnType<typeof setInterval> | undefined;
 	let terminalInputUnsub: (() => void) | undefined;
+	// Last agent-recap source text per session — see lastAssistantText().
+	const lastAgentRecapKey = new Map<string, string>();
 
 	// ── Session lifecycle ──────────────────────────────────────────
 
@@ -285,6 +302,7 @@ export default function (pi: ExtensionAPI) {
 		terminalInputUnsub?.();
 		terminalInputUnsub = undefined;
 		dropSession(sid(ctx));
+		lastAgentRecapKey.delete(sid(ctx));
 		statusWidget?.dispose();
 		statusWidget = undefined;
 	});
@@ -375,6 +393,11 @@ export default function (pi: ExtensionAPI) {
 		const { messages: branchMessages, userTurnCount } = scanBranch(ctx);
 		const before = getState(sessionId);
 
+		// Source text for this turn's agent recap (the last assistant reply).
+		// Empty → nothing was said in natural language; unchanged → agent_end
+		// re-fired without a new reply. Either way, skip the recap call below.
+		const recapKey = lastAssistantText(event.messages);
+
 		// Goal derivation: parallel, no UI.
 		const shouldDeriveGoal =
 			before.goalSource === "auto" &&
@@ -423,45 +446,52 @@ export default function (pi: ExtensionAPI) {
 			})();
 		}
 
-		// Agent recap: own entry id, runs concurrently with the user-recap
-		// stream that may still be wrapping up from before_agent_start.
-		const entryId = addStreamingEntry(sessionId, "agent");
-		statusWidget?.update();
+		// Skip the agent recap when there is no new assistant text to summarize
+		// (empty turn) or it is identical to the last one we already recapped
+		// (agent_end re-fire) — both would just burn another model call for the
+		// same line. Goal derivation above is unaffected.
+		if (recapKey && lastAgentRecapKey.get(sessionId) !== recapKey) {
+			// Agent recap: own entry id, runs concurrently with the user-recap
+			// stream that may still be wrapping up from before_agent_start.
+			const entryId = addStreamingEntry(sessionId, "agent");
+			statusWidget?.update();
 
-		void (async () => {
-			const beforeAgent = getState(sessionId);
-			try {
-				const { result, cachedWinnerCleared } = await generateAgentRecap(
-					event.messages,
-					ctx.modelRegistry,
-					{
-						onDelta: (running) => {
-							updateEntryText(sessionId, entryId, running);
-							statusWidget?.update();
+			void (async () => {
+				const beforeAgent = getState(sessionId);
+				try {
+					const { result, cachedWinnerCleared } = await generateAgentRecap(
+						event.messages,
+						ctx.modelRegistry,
+						{
+							onDelta: (running) => {
+								updateEntryText(sessionId, entryId, running);
+								statusWidget?.update();
+							},
+							preferredModelId: beforeAgent.modelOverride,
+							sessionModel: ctx.model,
+							cachedWinner: beforeAgent.cachedRecapModel,
 						},
-						preferredModelId: beforeAgent.modelOverride,
-						sessionModel: ctx.model,
-						cachedWinner: beforeAgent.cachedRecapModel,
-					},
-				);
-				if (cachedWinnerCleared) clearCachedRecapModel(sessionId);
-				if (!result) {
-					removeEntry(sessionId, entryId);
+					);
+					if (cachedWinnerCleared) clearCachedRecapModel(sessionId);
+					if (!result) {
+						removeEntry(sessionId, entryId);
+						statusWidget?.update();
+						return;
+					}
+					finalizeEntry(sessionId, entryId, result.recap, result.modelId);
+					setCachedRecapModel(sessionId, result.modelId);
+					lastAgentRecapKey.set(sessionId, recapKey);
+					persistState(sessionId, pi);
 					statusWidget?.update();
-					return;
+				} catch (err) {
+					logError("agent recap failed:", err);
+					updateEntryText(sessionId, entryId, "⚠️ Recap failed. Use /recap to pick another model. (For best results, use the benchmark)");
+					finalizeEntry(sessionId, entryId, "⚠️ Recap failed. Use /recap to pick another model. (For best results, use the benchmark)", beforeAgent.modelOverride || "error");
+					persistState(sessionId, pi);
+					statusWidget?.update();
 				}
-				finalizeEntry(sessionId, entryId, result.recap, result.modelId);
-				setCachedRecapModel(sessionId, result.modelId);
-				persistState(sessionId, pi);
-				statusWidget?.update();
-			} catch (err) {
-				logError("agent recap failed:", err);
-				updateEntryText(sessionId, entryId, "⚠️ Recap failed. Use /recap to pick another model. (For best results, use the benchmark)");
-				finalizeEntry(sessionId, entryId, "⚠️ Recap failed. Use /recap to pick another model. (For best results, use the benchmark)", beforeAgent.modelOverride || "error");
-				persistState(sessionId, pi);
-				statusWidget?.update();
-			}
-		})();
+			})();
+		}
 	});
 
 	// ── Keyboard shortcut: ctrl+shift+r - focus the recap panel ──

@@ -144,9 +144,22 @@ export interface RecapResult {
 }
 
 function cleanRecap(raw: string): string {
+	// Strip code fences first so a fenced reply doesn't hide the real line.
 	const stripped = raw.replace(/```(?:[\w-]*)\n?/g, "").replace(/```/g, "").trim();
-	const firstLine = stripped.split("\n").find((l) => l.trim())?.trim() || stripped;
-	return firstLine.slice(0, 100);
+	// First non-empty line — models sometimes emit a label/blank line first.
+	const firstLine = stripped.split("\n").map((l) => l.trim()).find(Boolean) ?? stripped;
+	// Normalize common wrappers the model adds around the actual recap:
+	// one leading list/enumeration marker, a "Recap:"/"Title:" label prefix,
+	// surrounding quotes/backticks, and collapsed internal whitespace.
+	// Bare leading digits ("3 files changed") are preserved — only "1." / "2)"
+	// style enumeration markers are stripped.
+	const cleaned = firstLine
+		.replace(/^(?:[-•*]\s+|\d+[.)]\s+)/, "")
+		.replace(/^(?:recap|title|summary)\s*:\s*/i, "")
+		.replace(/^["'`]+|["'`]+$/g, "")
+		.replace(/\s+/g, " ")
+		.trim();
+	return (cleaned || firstLine).slice(0, 100);
 }
 
 /**
