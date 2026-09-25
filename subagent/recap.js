@@ -20,7 +20,8 @@
  *     (layer 5). Everything in layers 3 and 4 is fair game.
  */
 import { stream } from "@earendil-works/pi-ai";
-import { findFastModelChain, thinkingOffOpts } from "./picker.js";
+import { findFastModelChain } from "./picker.js";
+import { recapRequestHeaders, thinkingOffOpts } from "./opencode-gateway.js";
 import { addToBlacklist } from "../state/blacklist.js";
 import { logDebug, logError, logTrace } from "../util/log.js";
 /** Per-attempt timeout. Anything slower than this on a non-sacred candidate
@@ -215,7 +216,7 @@ async function streamRecap(registry, systemPrompt, userMessages, options) {
         // half-recaps from a model that errored out mid-stream.
         const isRetry = i > 0;
         const onDelta = isRetry ? undefined : options.onDelta;
-        const outcome = await runOneAttempt(model, auth.apiKey, auth.headers || {}, systemPrompt, userMessages, onDelta);
+        const outcome = await runOneAttempt(model, auth.apiKey, recapRequestHeaders(model, auth.headers), systemPrompt, userMessages, onDelta);
         if (outcome.result) {
             if (isRetry)
                 options.onDelta?.(outcome.result.recap);

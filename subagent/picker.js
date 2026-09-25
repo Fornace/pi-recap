@@ -18,24 +18,12 @@
  * fallback than guessing from naming patterns and version numbers.
  *
  * Public surface:
- *   - thinkingOffOpts(model): per-provider knob to disable extended thinking
  *   - findFastModelChain(...): the 4-layer ordered chain
  *   - CURATED_CHAIN: editable -- one named const, no scattered literals.
  */
 import { isCachedModelFresh } from "../state/state.js";
 import { isBlacklisted } from "../state/blacklist.js";
 import { CURATED_CHAIN } from "pi-bench";
-export function thinkingOffOpts(model) {
-    switch (model.api) {
-        case "anthropic-messages":
-            return { thinkingEnabled: false };
-        case "google-generative-ai":
-        case "google-vertex":
-            return { thinking: { enabled: false } };
-        default:
-            return {};
-    }
-}
 // ── CURATED CHAIN ──────────────────────────────────────────────────────
 //
 // Imported from pi-bench (the source of truth for bench data).
