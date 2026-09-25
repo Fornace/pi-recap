@@ -38,6 +38,7 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { Message } from "@earendil-works/pi-ai";
 import {
 	addStreamingEntry,
 	clearCachedGoalModel,
@@ -63,6 +64,7 @@ import {
 	generateAgentRecap,
 	listAvailableFastModels,
 	previewFirstPick,
+	extractConversationContext,
 } from "./subagent/recap.js";
 import { deriveGoalInitial, deriveGoalRefine } from "./subagent/goal.js";
 import {
@@ -422,6 +424,14 @@ export default function (pi: ExtensionAPI) {
 				}
 			})();
 		}
+
+		// A step can consist only of thinking plus tool calls -- pi emits agent_end
+		// per step -- and extractConversationContext drops both. With no natural
+		// language to summarize, buildHistory would send its placeholder, "No
+		// conversation context available.", and the summarizer answers by asking the
+		// user for context, which then renders as the recap. Mirror the guard the
+		// user-recap path already applies to an empty prompt.
+		if (!extractConversationContext(event.messages as Message[], 8)) return;
 
 		// Agent recap: own entry id, runs concurrently with the user-recap
 		// stream that may still be wrapping up from before_agent_start.

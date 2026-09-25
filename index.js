@@ -40,7 +40,7 @@ import { addStreamingEntry, clearCachedGoalModel, clearCachedRecapModel, commitS
 import { replayFromBranch } from "./state/replay.js";
 import { getGlobalModelOverride, setGlobalModelOverride } from "./state/config.js";
 import { StatusWidget } from "./ui/status-widget.js";
-import { generateUserRecap, generateAgentRecap, listAvailableFastModels, previewFirstPick, } from "./subagent/recap.js";
+import { generateUserRecap, generateAgentRecap, listAvailableFastModels, previewFirstPick, extractConversationContext, } from "./subagent/recap.js";
 import { deriveGoalInitial, deriveGoalRefine } from "./subagent/goal.js";
 import { addToBlacklist, loadBlacklist, removeFromBlacklist, resetBlacklist, seedBlacklist, } from "./state/blacklist.js";
 import { logError } from "./util/log.js";
@@ -362,6 +362,14 @@ export default function (pi) {
                 }
             })();
         }
+        // A step can consist only of thinking plus tool calls -- pi emits agent_end
+        // per step -- and extractConversationContext drops both. With no natural
+        // language to summarize, buildHistory would send its placeholder, "No
+        // conversation context available.", and the summarizer answers by asking the
+        // user for context, which then renders as the recap. Mirror the guard the
+        // user-recap path already applies to an empty prompt.
+        if (!extractConversationContext(event.messages, 8))
+            return;
         // Agent recap: own entry id, runs concurrently with the user-recap
         // stream that may still be wrapping up from before_agent_start.
         const entryId = addStreamingEntry(sessionId, "agent");
@@ -568,6 +576,24 @@ export default function (pi) {
                         statusWidget?.setBenchProgress(undefined);
                         ctx.ui.notify("Bench finished but no results found.", "warning");
                         return;
+                    }
+                    try {
+                        const csvContent = fs.readFileSync(csvPath, "utf8");
+                        const csvLines = csvContent.split("\n").filter(l => l.trim());
+                        if (csvLines.length < 2) {
+                            statusWidget?.setBenchProgress(undefined);
+                            ctx.ui.notify("Bench finished but results file is empty.", "warning");
+                            return;
+                        }
+                        const header = csvLines[0];
+                        if (!header.includes("id")) {
+                            statusWidget?.setBenchProgress(undefined);
+                            ctx.ui.notify(`Bench failed: incompatible CSV from pi-bench (missing 'id' column). Header: ${header.slice(0, 50)}`, "warning");
+                            return;
+                        }
+                    }
+                    catch (e) {
+                        // Ignore read errors here, showBenchmarkUI will handle/throw them
                     }
                     statusWidget?.pauseRendering();
                     const picked = await showBenchmarkUI(ctx, csvPath, "Pick recap model");
