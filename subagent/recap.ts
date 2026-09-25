@@ -23,7 +23,8 @@
 import type { Api, AssistantMessage, Message, Model } from "@earendil-works/pi-ai";
 import { stream } from "@earendil-works/pi-ai";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
-import { findFastModelChain, thinkingOffOpts } from "./picker.js";
+import { findFastModelChain } from "./picker.js";
+import { recapRequestHeaders, thinkingOffOpts } from "./opencode-gateway.js";
 import { addToBlacklist } from "../state/blacklist.js";
 import type { CachedModel } from "../state/state.js";
 import { logDebug, logError, logTrace } from "../util/log.js";
@@ -285,7 +286,7 @@ async function streamRecap(
 		const outcome = await runOneAttempt(
 			model,
 			auth.apiKey,
-			auth.headers || {},
+			recapRequestHeaders(model, auth.headers),
 			systemPrompt,
 			userMessages,
 			onDelta,

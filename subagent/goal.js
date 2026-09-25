@@ -16,7 +16,8 @@
  */
 import { stream } from "@earendil-works/pi-ai";
 import { extractConversationContext, buildHistory, extractTextFromMessage } from "./recap.js";
-import { findFastModelChain, thinkingOffOpts } from "./picker.js";
+import { findFastModelChain } from "./picker.js";
+import { recapRequestHeaders, thinkingOffOpts } from "./opencode-gateway.js";
 import { addToBlacklist } from "../state/blacklist.js";
 import { logDebug, logError, logTrace } from "../util/log.js";
 const ATTEMPT_TIMEOUT_MS = 15000;
@@ -94,7 +95,7 @@ async function streamOnce(registry, systemPrompt, userMessages, options) {
         const drain = async () => {
             const events = stream(model, { messages: userMessages, systemPrompt }, {
                 apiKey: auth.apiKey,
-                headers: auth.headers || {},
+                headers: recapRequestHeaders(model, auth.headers),
                 maxTokens: 64,
                 temperature: 0,
                 ...thinkingOffOpts(model),

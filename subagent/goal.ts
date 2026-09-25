@@ -19,7 +19,8 @@ import type { Api, AssistantMessage, Message, Model } from "@earendil-works/pi-a
 import { stream } from "@earendil-works/pi-ai";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { extractConversationContext, buildHistory, extractTextFromMessage } from "./recap.js";
-import { findFastModelChain, thinkingOffOpts } from "./picker.js";
+import { findFastModelChain } from "./picker.js";
+import { recapRequestHeaders, thinkingOffOpts } from "./opencode-gateway.js";
 import { addToBlacklist } from "../state/blacklist.js";
 import type { CachedModel } from "../state/state.js";
 import { logDebug, logError, logTrace } from "../util/log.js";
@@ -142,7 +143,7 @@ async function streamOnce(
 				{ messages: userMessages, systemPrompt },
 				{
 					apiKey: auth.apiKey!,
-					headers: auth.headers || {},
+					headers: recapRequestHeaders(model, auth.headers),
 					maxTokens: 64,
 					temperature: 0,
 					...thinkingOffOpts(model),
