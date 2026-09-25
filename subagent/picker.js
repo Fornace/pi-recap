@@ -20,11 +20,28 @@
  * Public surface:
  *   - thinkingOffOpts(model): per-provider knob to disable extended thinking
  *   - findFastModelChain(...): the 4-layer ordered chain
+ *   - resolveHandles(handles, availableIds): bare bench handle -> registry id
  *   - CURATED_CHAIN: editable -- one named const, no scattered literals.
  */
 import { isCachedModelFresh } from "../state/state.js";
 import { isBlacklisted } from "../state/blacklist.js";
 import { CURATED_CHAIN } from "pi-bench";
+/**
+ * Resolve bare bench handles (e.g. "claude-haiku-4.5") to registry IDs
+ * (e.g. "claude-haiku-4-5"). This is the strategy CLAUDE.md marks CRITICAL:
+ * exact match, then dots->dashes normalization, then suffix match. Returns a
+ * handle -> registry id map; handles with nothing available are omitted.
+ */
+export function resolveHandles(handles, availableIds) {
+    const resolved = new Map();
+    for (const handle of handles) {
+        const normalized = handle.replace(/\./g, "-");
+        const match = availableIds.find((id) => id === handle || id === normalized || id.endsWith("." + normalized) || id.endsWith("-" + handle));
+        if (match)
+            resolved.set(handle, match);
+    }
+    return resolved;
+}
 export function thinkingOffOpts(model) {
     switch (model.api) {
         case "anthropic-messages":
