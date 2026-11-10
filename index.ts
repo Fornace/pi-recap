@@ -467,10 +467,12 @@ export default function (pi: ExtensionAPI) {
 	// ── Keyboard shortcut: ctrl+shift+r - focus the recap panel ──
 	// Plain ctrl+r is the built-in app.session.rename, so we use the shift
 	// variant. Shortcut flips focus to the StatusWidget so arrow keys route
-	// to its handleInput. Esc or ctrl+shift+r again releases.
+	// to its handleInput. Esc or ctrl+shift+r again releases. The panel is also
+	// clickable and scrollable with the mouse, so this key is only a fallback
+	// for terminals or keyboards where the shortcut never reaches us.
 
 	pi.registerShortcut("ctrl+shift+r", {
-		description: "Focus the recap panel (arrows to navigate, esc to release)",
+		description: "Focus the recap panel (or click/scroll it; arrows to navigate, esc to release)",
 		handler: async (ctx) => {
 			if (!ctx.hasUI) return;
 			statusWidget?.toggleFocus();
