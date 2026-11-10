@@ -8,9 +8,14 @@
  *   - Title cuts into the top border on the left. Model tag cuts in on the
  *     right with a `*` suffix when locked via /recap-model. A pristine session
  *     (no goal yet) renders the placeholder dim+italic in the same slot.
- *   - Bottom border carries a contextual focus hint: "ctrl+shift+r focus"
- *     when not focused, "↑↓ navigate · esc release [+N older]" when focused.
- *     Always visible. Solves the v3 complaint that the hint was invisible.
+ *   - Bottom border carries a contextual hint: "click or scroll" when idle,
+ *     "↑↓/wheel scroll · click/esc release" when focused. Always visible.
+ *     Solves the v3 complaint that the hint was invisible, and advertises the
+ *     mouse affordances for terminals where ctrl+shift+r never arrives.
+ *   - Mouse: the panel implements handleMouse, so a wheel over it pages
+ *     through older entries and a left press focuses it / selects the clicked
+ *     row / releases it. Typing anything hands focus back to the editor and
+ *     replays the keystroke, so no Esc is needed to resume composing.
  *   - Interior rows: 1 space inside each border. Then a fixed-width time
  *     column (right-aligned, dim), 2 spaces, a 3-cell speaker tag colored
  *     per role (you = borderAccent blue, pi = accent purple), 2 spaces,
@@ -89,6 +94,8 @@ export class StatusWidget {
     focused = false;
     scrollOffset = 0;
     selectedRow = VIEW_SIZE - 1;
+    /** Row numbering of the last painted frame, used by handleMouse(). */
+    rowMap;
     /** Per-entry animation timing. Keyed by entry id. Populated lazily on
      *  first render of a streaming row, updated on each render based on the
      *  current state, dropped after the settle window expires. */
@@ -206,7 +213,8 @@ export class StatusWidget {
     resumeRendering() {
         this.renderingPaused = false;
     }
-    /** Bound to the ctrl+shift+r shortcut. Toggles focus. Snap, never animate. */
+    /** Bound to the ctrl+shift+r shortcut (and to clicks on the card). Toggles
+     *  focus. Snap, never animate. */
     toggleFocus() {
         if (!this.tui)
             return;
@@ -216,7 +224,8 @@ export class StatusWidget {
                 return;
             this.focused = true;
             this.scrollOffset = 0;
-            this.selectedRow = Math.min(VIEW_SIZE - 1, history.length - 1);
+            this.selectedRow = VIEW_SIZE - 1;
+            this.clampSelectedRow(history.length);
             // Capture the current focus target (typically the host editor) so
             // releaseFocus() can hand it back. TUI.focusedComponent is private
             // in the TS surface but a plain field at runtime.
@@ -228,6 +237,49 @@ export class StatusWidget {
         }
         this.tui.requestRender();
     }
+    /** Take focus and point the selection at one visible row. Shared by the
+     *  keyboard shortcut and the mouse press path; keeps the previously focused
+     *  component so releaseFocus() can hand it back. */
+    grabFocus(rowIndex) {
+        const tui = this.tui;
+        if (!tui)
+            return;
+        if (!this.focused) {
+            const current = tui.focusedComponent;
+            this.previousFocus = current && current !== this ? current : null;
+            this.focused = true;
+            tui.setFocus(this);
+        }
+        this.selectedRow = rowIndex;
+        this.clampSelectedRow();
+    }
+    /** Number of recap rows the current scroll offset actually shows. */
+    visibleCount(total = getActiveState().history.length) {
+        return Math.min(VIEW_SIZE, Math.max(0, total - this.scrollOffset));
+    }
+    /** Keep selectedRow inside the visible window after any scroll change. */
+    clampSelectedRow(total = getActiveState().history.length) {
+        const count = this.visibleCount(total);
+        this.selectedRow = count === 0 ? 0 : Math.max(0, Math.min(count - 1, this.selectedRow));
+    }
+    /** Re-derive the focused flag from the renderer.
+     *
+     *  A click on the editor or transcript hands focus elsewhere without ever
+     *  calling into this component (pi-tui dispatches the synthesized click
+     *  straight to the new target). Without this check the panel would keep its
+     *  selection marker and focused hint, and a later click would take the
+     *  "already focused" branch while the keyboard actually lives elsewhere. */
+    syncFocusFromTui() {
+        if (!this.focused)
+            return;
+        const tui = this.tui;
+        if (!tui || typeof tui.getFocusedComponent !== "function")
+            return;
+        if (tui.getFocusedComponent() !== this) {
+            this.focused = false;
+            this.previousFocus = null;
+        }
+    }
     /** Release keyboard focus and hand it back to whatever was focused before
      *  the widget grabbed it (the editor in normal interactive mode). Never
      *  call setFocus(null) here — that leaves the TUI with no focused
@@ -236,6 +288,7 @@ export class StatusWidget {
         this.focused = false;
         this.tui?.setFocus(this.previousFocus);
         this.previousFocus = null;
+        this.clampSelectedRow();
     }
     dispose() {
         // Reentry guard: setExtensionWidget(undefined) in pi-host calls back
@@ -253,6 +306,8 @@ export class StatusWidget {
         this.currentTheme = undefined;
         this.uiCtx = undefined;
         this.focused = false;
+        this.previousFocus = null;
+        this.rowMap = undefined;
         this.entryAnim.clear();
         this.lastSeenText.clear();
         this.wasStreaming.clear();
@@ -264,6 +319,9 @@ export class StatusWidget {
         const theme = this.currentTheme;
         if (!theme)
             return [];
+        // A focus change outside this component (click on the editor, an overlay
+        // taking over) must drop the selection chrome on the next frame.
+        this.syncFocusFromTui();
         // Rounded card needs at least the two corners + 1 cell of horizontal
         // payload between them. Below that we just emit nothing.
         if (width < 4)
@@ -320,6 +378,9 @@ export class StatusWidget {
         lines.push(" ".repeat(1 + this.decoyTick));
         const liveNotice = state.notice && state.notice.expiresAt > now ? state.notice : undefined;
         lines.push(this.renderTopBorder(theme, width, goal, state.lastModel, state.modelOverride, liveNotice?.text));
+        // Everything pushed from here to the bottom border is a card interior row;
+        // the branches below record how many of those rows are recap entries.
+        const firstHistoryRow = lines.length;
         const innerWidth = Math.max(0, width - 2 * (1 + BORDER_PAD)); // border+pad on each side
         // Bench mode: show progress lines instead of normal history.
         if (this.benchLines && this.benchLines.length > 0) {
@@ -333,6 +394,7 @@ export class StatusWidget {
             for (let i = benchVisible.length; i < VIEW_SIZE; i++) {
                 lines.push(this.padRow(theme, width, ""));
             }
+            this.rowMap = { firstHistoryRow, historyRows: 0, interactive: false };
             lines.push(this.renderBottomBorder(theme, width, history.length));
             return lines;
         }
@@ -353,6 +415,7 @@ export class StatusWidget {
             for (let i = setupLines.length; i < VIEW_SIZE; i++) {
                 lines.push(this.padRow(theme, width, ""));
             }
+            this.rowMap = { firstHistoryRow, historyRows: 0, interactive: false };
             lines.push(this.renderBottomBorder(theme, width, history.length));
             return lines;
         }
@@ -397,7 +460,89 @@ export class StatusWidget {
             }
         }
         lines.push(this.renderBottomBorder(theme, width, total));
+        this.rowMap = {
+            firstHistoryRow,
+            historyRows: visible.length,
+            interactive: visible.length > 0,
+        };
         return lines;
+    }
+    // ── Mouse ─────────────────────────────────────────────────────────
+    /**
+     * Mouse contract (pi-tui calls this for events inside the panel's layout
+     * box: the above-editor widget container forwards them with local
+     * coordinates, where y=0 is the decoy row above the top border):
+     *   - wheel: page through older / newer recap entries without needing focus
+     *     first, and swallow the event so the transcript underneath stays put.
+     *   - left press on an entry row: focus + select it; press the already
+     *     selected row to release; press a frame row to toggle focus.
+     * Focus is moved with tui.setFocus() here instead of returning
+     * `focus: true`, so releaseFocus() can hand the keyboard back to the exact
+     * component that had it.
+     */
+    handleMouse(event) {
+        if (this.disposed || this.renderingPaused)
+            return undefined;
+        if (event.type === "wheel")
+            return this.handleWheel(event);
+        if (event.type !== "press" || event.button !== "left")
+            return undefined;
+        return this.handlePress(event);
+    }
+    handleWheel(event) {
+        const total = getActiveState().history.length;
+        const maxOffset = Math.max(0, total - VIEW_SIZE);
+        const delta = event.wheelDelta ?? 0;
+        if (delta === 0)
+            return undefined;
+        if (maxOffset === 0) {
+            // Nothing older to show. When focused the panel still owns the wheel
+            // (arrows and wheel do the same thing); when idle the host keeps it so
+            // the transcript still scrolls under a pointer resting on the card.
+            return this.focused ? { handled: true, render: false } : undefined;
+        }
+        const step = Math.max(1, Math.min(VIEW_SIZE, Math.abs(delta)));
+        const next = delta < 0
+            ? Math.min(maxOffset, this.scrollOffset + step) // wheel up: older entries
+            : Math.max(0, this.scrollOffset - step); // wheel down: newer entries
+        if (next === this.scrollOffset) {
+            // Already at an end of the history: consume anyway so the wheel does
+            // not fall through and scroll the chat behind the panel.
+            return { handled: true, render: false };
+        }
+        this.scrollOffset = next;
+        this.clampSelectedRow(total);
+        this.tui?.requestRender();
+        return { handled: true, render: true };
+    }
+    handlePress(event) {
+        const map = this.rowMap;
+        if (!map)
+            return undefined;
+        this.syncFocusFromTui();
+        const total = getActiveState().history.length;
+        const rowIndex = event.y - map.firstHistoryRow;
+        const onEntryRow = map.interactive && rowIndex >= 0 && rowIndex < map.historyRows;
+        if (onEntryRow) {
+            if (!this.focused) {
+                this.grabFocus(rowIndex);
+            }
+            else if (rowIndex === this.selectedRow) {
+                // Second click on the row already selected: done reading.
+                this.releaseFocus();
+            }
+            else {
+                this.selectedRow = rowIndex;
+            }
+            this.tui?.requestRender();
+            return { handled: true, render: true };
+        }
+        // Frame rows (top / bottom border, blank filler, bench or setup body)
+        // have nothing to select: a press there just toggles focus.
+        if (!this.focused && total === 0)
+            return undefined;
+        this.toggleFocus();
+        return { handled: true, render: true };
     }
     handleInput(data) {
         if (!this.focused)
@@ -414,28 +559,38 @@ export class StatusWidget {
             return;
         }
         if (matchesKey(data, Key.up)) {
-            const visibleCount = Math.min(VIEW_SIZE, total - this.scrollOffset);
-            const top = Math.max(0, VIEW_SIZE - visibleCount);
-            if (this.selectedRow > top) {
+            if (this.selectedRow > 0) {
                 this.selectedRow--;
             }
             else if (this.scrollOffset + VIEW_SIZE < total) {
                 this.scrollOffset++;
+                this.clampSelectedRow(total);
             }
             this.tui?.requestRender();
             return;
         }
         if (matchesKey(data, Key.down)) {
-            if (this.selectedRow < VIEW_SIZE - 1
-                && (this.scrollOffset + (VIEW_SIZE - 1 - this.selectedRow)) < total) {
+            if (this.selectedRow < this.visibleCount(total) - 1) {
                 this.selectedRow++;
             }
             else if (this.scrollOffset > 0) {
                 this.scrollOffset--;
+                this.clampSelectedRow(total);
             }
             this.tui?.requestRender();
             return;
         }
+        // Any other key means the user is done reading and wants to type. Hand
+        // focus back to the editor and replay the keystroke into it, so no Esc or
+        // extra click is needed to resume composing.
+        const target = this.previousFocus;
+        if (!target)
+            return;
+        if (data === "\r")
+            this.bumpDecoy();
+        this.releaseFocus();
+        this.tui?.requestRender();
+        target.handleInput?.(data);
     }
     invalidate() {
         // No render caches. The widget recomputes from state every render().
@@ -578,24 +733,24 @@ export class StatusWidget {
             borderColor(BORDER.tr));
     }
     /**
-     * Bottom border with a contextual focus hint cut in. Always visible, so
-     * users discover ctrl+shift+r without poking around. Hint copy:
-     *   - not focused                 -> "ctrl+shift+r focus"
-     *   - focused                     -> "↑↓ navigate · esc release"
-     *   - focused with older entries  -> "↑↓ navigate · esc release · +N older"
+     * Bottom border with a contextual hint cut in. Always visible, so the mouse
+     * affordances are discoverable without poking around:
+     *   - not focused        -> "click or scroll" (+ "(↑N more)" when older
+     *                           entries are out of view)
+     *   - focused            -> "↑↓/wheel scroll · click/esc release" (+ "+N older")
      */
     renderBottomBorder(theme, width, totalEntries) {
         const borderColor = (s) => theme.fg("border", s);
         const olderCount = Math.max(0, totalEntries - VIEW_SIZE - this.scrollOffset);
         let hint;
         if (!this.focused) {
-            hint = "ctrl+shift+r focus";
+            hint = olderCount > 0 ? `click or scroll (↑${olderCount} more)` : "click or scroll";
         }
         else if (olderCount > 0) {
-            hint = `↑↓ navigate · esc release · +${olderCount} older`;
+            hint = `↑↓/wheel scroll · click/esc release · +${olderCount} older`;
         }
         else {
-            hint = "↑↓ navigate · esc release";
+            hint = `↑↓/wheel scroll · click/esc release`;
         }
         // Same construction as the top border, but with the cut on the LEFT.
         // Reserve: 2 corners + 2 leading h-rule cells (border-cut visual).

@@ -17,7 +17,7 @@ If you can't view the video above, here is a fallback GIF version:
 - **Auto-derived session goal** — the title updates automatically after the first turn using a fast LLM
 - **Turn history** — last 4 recaps with timestamps, speaker tags (`you` / `pi`), and fade-to-dim for older entries
 - **Live streaming** — breathing dot while thinking, caret blink during token arrival, 180ms settle animation on completion
-- **Keyboard navigation** — `Ctrl+Shift+R` to focus, `↑↓` to scroll older entries, `Esc` to release
+- **Keyboard and mouse navigation** — `Ctrl+Shift+R` or a click to focus, `↑↓` or the wheel to scroll older entries, `Esc` or a second click to release
 - **Slash commands** — `/goal` to override the title, `/recap-model` to pick the summarization model, `/recap-blacklist` to manage the model skip-list
 - **Theme-agnostic text colors** — recap headline and body use hardcoded high-contrast colors that work on any theme (light or dark)
 - **Cheap summarization** — auto-selects the fastest/cheapest available model (flash/mini/haiku/turbo) to keep costs near zero. Curated chain and blacklist seed are imported from [pi-bench](https://github.com/fornace/pi-bench), the source of truth for bench data.
@@ -38,11 +38,14 @@ Restart pi. The recap panel appears above the editor after your first message.
 
 The panel is passive — it just shows the last few turns. No configuration needed.
 
-| Shortcut | Action |
+| Input | Action |
 |---|---|
-| `Ctrl+Shift+R` | Focus the recap panel |
-| `↑` / `↓` | Navigate older entries (while focused) |
-| `Esc` | Release focus |
+| `Ctrl+Shift+R` or click a row | Focus the recap panel |
+| `↑` / `↓` or wheel over the panel | Navigate older entries |
+| `Esc`, `Ctrl+Shift+R`, or click the selected row | Release focus |
+| any other key while focused | Releases focus and types the key into the editor |
+
+The mouse works without any keybinding, which covers terminals and multiplexers that never deliver `Ctrl+Shift+R`.
 
 ### Slash commands
 
