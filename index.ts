@@ -56,7 +56,8 @@ import {
 	updateEntryText,
 } from "./state/store.js";
 import { replayFromBranch } from "./state/replay.js";
-import { getGlobalModelOverride, setGlobalModelOverride } from "./state/config.js";
+import { getGlobalModelOverride, getGlobalPosition, setGlobalModelOverride, setGlobalPosition } from "./state/config.js";
+import type { PanelPosition } from "./state/config.js";
 import { StatusWidget } from "./ui/status-widget.js";
 import {
 	generateUserRecap,
@@ -480,7 +481,7 @@ export default function (pi: ExtensionAPI) {
 	// ── Slash command: /recap - unified interactive menu ──────────
 
 	pi.registerCommand("recap", {
-		description: "Manage session goal, recap model, and blacklist",
+		description: "Manage session goal, recap model, panel position, and blacklist",
 		handler: async (_args, ctx) => {
 			const sessionId = sid(ctx);
 			const current = getState(sessionId);
@@ -497,6 +498,14 @@ export default function (pi: ExtensionAPI) {
 			const clearModelLabel = "   └─ Reset model to auto-pick";
 			const benchLabel = "⚡ Benchmark models & pick fastest";
 
+			// Position setting: panel above the input box (the default every
+			// earlier version used) or pinned to the top of a fullscreen window.
+			const positionAboveLabel = "Above the editor (default)";
+			const positionTopLabel = "Top of screen (pinned)";
+			const positionLabel = getGlobalPosition() === "top"
+				? `📍 Position: ${positionTopLabel}`
+				: `📍 Position: ${positionAboveLabel}`;
+
 			const bl = loadBlacklist();
 			const blLabel = `🚫 Manage Blacklist (${bl.entries.length} items)`;
 
@@ -505,6 +514,7 @@ export default function (pi: ExtensionAPI) {
 				...(current.goal ? [clearGoalLabel] : []),
 				modelLabel,
 				...(current.modelOverride ? [clearModelLabel] : []),
+				positionLabel,
 				benchLabel,
 				blLabel,
 			];
@@ -567,6 +577,25 @@ export default function (pi: ExtensionAPI) {
 				persistState(sessionId, pi);
 				statusWidget?.update();
 				ctx.ui.notify("Recap model reset globally to auto-pick.", "info");
+				return;
+			}
+
+			// ── Panel position ───────────────────────────────────
+
+			if (choice === positionLabel) {
+				const picked = await ctx.ui.select("Recap panel position", [positionAboveLabel, positionTopLabel]);
+				if (!picked) return; // dismissed
+				const next: PanelPosition = picked === positionTopLabel ? "top" : "aboveEditor";
+				setGlobalPosition(next);
+				// Re-place the card right away instead of waiting for the next turn.
+				statusWidget?.setPosition(next);
+				statusWidget?.update();
+				ctx.ui.notify(
+					next === "top"
+						? "Recap panel pinned to the top of the screen (fullscreen). Saved globally."
+						: "Recap panel back above the editor. Saved globally.",
+					"info",
+				);
 				return;
 			}
 

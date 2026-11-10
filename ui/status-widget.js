@@ -1,5 +1,17 @@
 /**
- * Recap surface, mounted aboveEditor.
+ * Recap surface.
+ *
+ * Placement (driven by the `position` setting in state/config.ts):
+ *   - "aboveEditor" (default): the host's above-editor widget slot, the place
+ *     every earlier version used.
+ *   - "top": a fullscreen window's root is a stack of [transcript, dock]. The
+ *     panel is inserted as that stack's FIRST entry, so it takes row 1 of the
+ *     window, the transcript below it absorbs the remaining rows and scrolls on
+ *     its own, and the panel stays put while the chat scrolls. The host's
+ *     above-editor slot then renders nothing.
+ *   Regular (non-fullscreen) TUIs have no window root to pin to, so "top"
+ *   degrades to the above-editor slot. syncPlacement() reconciles the two per
+ *   frame; setPosition() applies a changed setting immediately.
  *
  * Visual language (v4):
  *   - The whole panel is wrapped in a single rounded card. Glyphs ╭ ╮ ╰ ╯ ─ │
@@ -35,6 +47,7 @@
  */
 import { truncateToWidth, visibleWidth, matchesKey, Key } from "@earendil-works/pi-tui";
 import { clearNotice, getActiveState, getActiveSessionId } from "../state/store.js";
+import { getGlobalPosition } from "../state/config.js";
 import { formatDate } from "../util/date.js";
 import { fgAnsi, parseHex, rgbLerp, RESET, newestColor, textColor, colorText } from "./anim.js";
 const WIDGET_KEY = "recap";
@@ -72,6 +85,47 @@ const BORDER = {
     h: "─",
     v: "│",
 };
+/** The window's root stack, when this TUI has one (fullscreen only). */
+function readRootStack(tui) {
+    if (!tui)
+        return undefined;
+    const root = tui.layoutRoot;
+    if (!root || typeof root !== "object")
+        return undefined;
+    const stack = root;
+    if (!Array.isArray(stack.entries) || !Array.isArray(stack.children))
+        return undefined;
+    return stack;
+}
+/** The component handed to the host's above-editor slot.
+ *
+ * It renders the panel only while the panel is not pinned to the window top,
+ * and it is a thin proxy on purpose: a host-side dispose (re-registration or a
+ * TUI mode switch) drops this slot without tearing down the panel itself. */
+class HostSlot {
+    owner;
+    constructor(owner) {
+        this.owner = owner;
+    }
+    render(width) {
+        const owner = this.owner;
+        if (!owner)
+            return [];
+        // The slot is rendered once per frame, which is exactly how often a mode
+        // switch (fullscreen <-> regular) can be noticed without polling.
+        owner.syncPlacement();
+        if (owner.isPinnedToTop)
+            return [];
+        return owner.render(width);
+    }
+    invalidate() {
+        this.owner?.invalidate();
+    }
+    /** Host-driven removal: drop the link only, never the panel. */
+    dispose() {
+        this.owner = undefined;
+    }
+}
 export class StatusWidget {
     uiCtx;
     widgetRegistered = false;
@@ -124,9 +178,27 @@ export class StatusWidget {
      *  custom UI overlay (e.g. pi-bench's Select) is active. Prevents the
      *  animation timer from painting stale frames over the overlay. */
     renderingPaused = false;
+    /** Where the panel wants to live. Seeded from config.json so a restart keeps
+     *  the user's choice; changed at runtime by setPosition(). */
+    position = getGlobalPosition();
+    /** Fullscreen only: the root stack the panel was inserted into, and the
+     *  exact entry that was added, so removal is precise and repeat-safe. */
+    pinnedRoot;
+    pinnedEntry;
+    /** True while the panel renders as the window's first row. */
+    pinnedTop = false;
+    /** The thin component registered in the host's above-editor slot. */
+    hostSlot;
+    /** Deferred re-registration after the placement changed (mode switch). */
+    remountTimer;
     // ── Lifecycle wiring (called from index.ts) ───────────────────────
     setUICtx(ctx) {
         if (ctx !== this.uiCtx) {
+            // Renderer or session changed: drop the old insertion and slot while
+            // the old tui reference is still live, then re-register on next use.
+            this.unpinFromWindowTop();
+            this.hostSlot?.dispose();
+            this.hostSlot = undefined;
             this.uiCtx = ctx;
             this.widgetRegistered = false;
             this.tui = undefined;
@@ -140,6 +212,41 @@ export class StatusWidget {
     get isFocused() {
         return this.focused;
     }
+    /** True while the panel is mounted as the first row of a fullscreen window. */
+    get isPinnedToTop() {
+        return this.pinnedTop;
+    }
+    /** Current placement, including the above-editor fallback. */
+    getPosition() {
+        return this.position;
+    }
+    /** Apply a new placement without a restart. The caller persists the setting
+     *  (state/config.ts) and this call only moves the card. */
+    setPosition(pos) {
+        const changed = this.position !== pos;
+        this.position = pos;
+        if (!changed)
+            return;
+        // The card may move by a row or two; bump the sentinel so pi-tui repaints
+        // every row instead of trusting a stale frame.
+        this.bumpDecoy();
+        const tui = this.tui;
+        if (!tui) {
+            // Not mounted yet (no UI, or before the first update()): the next
+            // registration reads `position` and places the panel correctly.
+            return;
+        }
+        if (pos === "top") {
+            // No window root (regular TUI): stays in the above-editor slot.
+            this.pinToWindowTop(tui);
+        }
+        else {
+            // Unpinning is all it takes to come back: the slot proxy renders the
+            // panel again on the next frame.
+            this.unpinFromWindowTop();
+        }
+        tui.requestRender(true);
+    }
     /** Called whenever state changes (replay, recap commit, /goal, every
      *  delta from a stream). Idempotent: registers the widget once, then
      *  just kicks a re-render. */
@@ -149,14 +256,12 @@ export class StatusWidget {
         if (!this.uiCtx)
             return;
         if (!this.widgetRegistered) {
-            this.uiCtx.setWidget(WIDGET_KEY, (tui, theme) => {
-                this.tui = tui;
-                this.currentTheme = theme;
-                return this;
-            }, { placement: "aboveEditor" });
-            this.widgetRegistered = true;
+            this.registerWidget();
         }
         else {
+            // Cheap: returns immediately unless the window changed shape or the
+            // position setting changed under us.
+            this.syncPlacement();
             // On the very first delta after registration, force a full redraw
             // to clear pi-tui's frame cache. This prevents the stale initial
             // frame (empty widget) from remaining visible as a ghost top border
@@ -171,6 +276,104 @@ export class StatusWidget {
             }
         }
         this.ensureAnimTimer();
+    }
+    /** Register the host-slot component. The factory decides, on every
+     *  registration, where the panel goes: pinned to the window top or left in
+     *  the host's above-editor slot. */
+    registerWidget() {
+        const ctx = this.uiCtx;
+        if (!ctx)
+            return;
+        const slot = new HostSlot(this);
+        this.hostSlot = slot;
+        ctx.setWidget(WIDGET_KEY, (tui, theme) => {
+            this.tui = tui;
+            this.currentTheme = theme;
+            if (this.position === "top")
+                this.pinToWindowTop(tui);
+            return slot;
+        }, { placement: "aboveEditor" });
+        this.widgetRegistered = true;
+    }
+    /** Insert the panel as the window's first row. No-op (returns false) in a
+     *  regular TUI, where there is no root stack to pin to. */
+    pinToWindowTop(tui) {
+        const root = readRootStack(tui);
+        if (!root)
+            return false; // regular TUI: no window root to pin to
+        // Already inserted into this exact root: keep it, do not duplicate.
+        if (this.pinnedRoot === root && this.pinnedEntry && root.entries.indexOf(this.pinnedEntry) !== -1) {
+            this.pinnedTop = true;
+            return true;
+        }
+        this.unpinFromWindowTop();
+        const entry = {
+            component: this,
+            basis: "auto",
+            grow: 0,
+            shrink: 1,
+            minSize: 0,
+        };
+        root.entries.unshift(entry);
+        root.children.unshift(this);
+        this.pinnedRoot = root;
+        this.pinnedEntry = entry;
+        this.pinnedTop = true;
+        root.invalidate();
+        tui.requestRender(true);
+        return true;
+    }
+    /** Remove the panel from the window root. No-op when it was never pinned. */
+    unpinFromWindowTop() {
+        const root = this.pinnedRoot;
+        const entry = this.pinnedEntry;
+        this.pinnedRoot = undefined;
+        this.pinnedEntry = undefined;
+        this.pinnedTop = false;
+        if (!root)
+            return;
+        if (entry) {
+            const index = root.entries.indexOf(entry);
+            if (index !== -1)
+                root.entries.splice(index, 1);
+        }
+        const childIndex = root.children.indexOf(this);
+        if (childIndex !== -1)
+            root.children.splice(childIndex, 1);
+        root.invalidate();
+        this.tui?.requestRender(true);
+    }
+    /** Reconcile where the panel lives. Returns immediately when nothing
+     *  changed, so it is safe to call once per rendered frame. */
+    syncPlacement() {
+        if (this.disposed)
+            return;
+        const root = readRootStack(this.tui);
+        const wantPinnedTop = this.position === "top" && root !== undefined;
+        if (wantPinnedTop) {
+            // Already inserted into this exact root: nothing to do.
+            if (this.pinnedRoot === root && this.pinnedEntry && root.entries.indexOf(this.pinnedEntry) !== -1)
+                return;
+        }
+        else if (this.pinnedRoot === undefined) {
+            // Nothing pinned, nothing to pin: the host slot is already right.
+            return;
+        }
+        // The window changed shape under us (fullscreen <-> regular, or a rebuilt
+        // renderer), or the position setting flipped: drop the stale insertion and
+        // re-register so the widget factory can place the panel again.
+        this.unpinFromWindowTop();
+        this.widgetRegistered = false;
+        if (this.remountTimer !== undefined)
+            return;
+        // Deferred: this can run from inside the host's dock render, and
+        // mutating the widget slot mid-render would rebuild a container that is
+        // currently being iterated.
+        this.remountTimer = setTimeout(() => {
+            this.remountTimer = undefined;
+            if (!this.disposed)
+                this.update();
+        }, 0);
     }
     /** Called by index.ts to push bench progress into the widget interior.
      *  Pass lines to display; pass undefined to clear and restore normal view. */
@@ -247,7 +450,18 @@ export class StatusWidget {
         this.renderingPaused = false;
         this.stopAnimTimer();
         this.stopSlowTimer();
+        if (this.remountTimer !== undefined) {
+            clearTimeout(this.remountTimer);
+            this.remountTimer = undefined;
+        }
+        const tui = this.tui;
         const ctx = this.uiCtx;
+        // Remove the top-slot insertion before dropping the tui reference so the
+        // freed rows are cleared on screen.
+        this.unpinFromWindowTop();
+        this.hostSlot?.dispose();
+        this.hostSlot = undefined;
+        tui?.requestRender(true);
         this.widgetRegistered = false;
         this.tui = undefined;
         this.currentTheme = undefined;
@@ -317,7 +531,11 @@ export class StatusWidget {
         // alternative — a ghosted duplicate status box — is worse.
         this.decoyTick = (this.decoyTick + 1) % 8;
         this.lastHistoryLength = history.length;
-        lines.push(" ".repeat(1 + this.decoyTick));
+        // Pinned to row 1 the panel never shifts vertically, so the scrollback
+        // ghost this decoy guards against cannot happen -- and emitting it would
+        // push the card's top border off the first screen row.
+        if (!this.pinnedTop)
+            lines.push(" ".repeat(1 + this.decoyTick));
         const liveNotice = state.notice && state.notice.expiresAt > now ? state.notice : undefined;
         lines.push(this.renderTopBorder(theme, width, goal, state.lastModel, state.modelOverride, liveNotice?.text));
         const innerWidth = Math.max(0, width - 2 * (1 + BORDER_PAD)); // border+pad on each side
