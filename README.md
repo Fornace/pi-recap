@@ -18,6 +18,7 @@ If you can't view the video above, here is a fallback GIF version:
 - **Turn history** — last 4 recaps with timestamps, speaker tags (`you` / `pi`), and fade-to-dim for older entries
 - **Live streaming** — breathing dot while thinking, caret blink during token arrival, 180ms settle animation on completion
 - **Keyboard navigation** — `Ctrl+Shift+R` to focus, `↑↓` to scroll older entries, `Esc` to release
+- **Panel position** — keep the panel above the input box (default) or pin it to the top of a fullscreen window, so it never moves while the chat scrolls. Switch it any time with `/recap` → **position**; the choice is saved to `state/config.json`.
 - **Slash commands** — `/goal` to override the title, `/recap-model` to pick the summarization model, `/recap-blacklist` to manage the model skip-list
 - **Theme-agnostic text colors** — recap headline and body use hardcoded high-contrast colors that work on any theme (light or dark)
 - **Cheap summarization** — auto-selects the fastest/cheapest available model (flash/mini/haiku/turbo) to keep costs near zero. Curated chain and blacklist seed are imported from [pi-bench](https://github.com/fornace/pi-bench), the source of truth for bench data.
@@ -54,7 +55,26 @@ Type `/recap` for the interactive menu. No arguments needed — everything is se
 | `/recap` → **clear goal** | Remove override, return to auto-derivation |
 | `/recap` → **model: ...** | Pick from available fast models (select list) |
 | `/recap` → **clear model** | Remove model override |
+| `/recap` → **position: ...** | Choose **Above the editor (default)** or **Top of screen (pinned)**. Saved globally, applied immediately |
 | `/recap` → **blacklist: N entries** → **view / add / remove / reset / re-seed** | Manage the model skip-list |
+
+### Panel position
+
+`/recap` → **position** offers two placements:
+
+- **Above the editor (default)** — the panel sits just above the input box, in the chat column. This is the layout every earlier version used, and what you get if `position` is absent from the config file.
+- **Top of screen (pinned)** — in a fullscreen window the panel is mounted as the window's first row. It takes its own height at the top, the conversation scrolls underneath it, and it stays put. In a regular (non-fullscreen) terminal there is no window root to pin to, so the panel simply stays above the editor.
+
+The setting is global and lives next to the model override in `~/.pi/agent/extensions/pi-recap/state/config.json`:
+
+```json
+{
+	"modelOverride": "gemini-2.5-flash",
+	"position": "top"
+}
+```
+
+Writing one setting never rewrites the other away. Editing the file by hand works too — unknown or missing values fall back to `aboveEditor`.
 
 ## Architecture
 

@@ -38,7 +38,7 @@
  */
 import { addStreamingEntry, clearCachedGoalModel, clearCachedRecapModel, commitState, dropSession, finalizeEntry, getState, removeEntry, replaceState, seedLastModel, setActiveSessionId, setCachedGoalModel, setCachedRecapModel, setNotice, updateEntryText, } from "./state/store.js";
 import { replayFromBranch } from "./state/replay.js";
-import { getGlobalModelOverride, setGlobalModelOverride } from "./state/config.js";
+import { getGlobalModelOverride, getGlobalPosition, setGlobalModelOverride, setGlobalPosition } from "./state/config.js";
 import { StatusWidget } from "./ui/status-widget.js";
 import { generateUserRecap, generateAgentRecap, listAvailableFastModels, previewFirstPick, } from "./subagent/recap.js";
 import { deriveGoalInitial, deriveGoalRefine } from "./subagent/goal.js";
@@ -413,7 +413,7 @@ export default function (pi) {
     });
     // ── Slash command: /recap - unified interactive menu ──────────
     pi.registerCommand("recap", {
-        description: "Manage session goal, recap model, and blacklist",
+        description: "Manage session goal, recap model, panel position, and blacklist",
         handler: async (_args, ctx) => {
             const sessionId = sid(ctx);
             const current = getState(sessionId);
@@ -427,6 +427,13 @@ export default function (pi) {
                 : `🧠 Model: auto-pick${current.lastModel ? ` (last: ${current.lastModel})` : ""}`;
             const clearModelLabel = "   └─ Reset model to auto-pick";
             const benchLabel = "⚡ Benchmark models & pick fastest";
+            // Position setting: panel above the input box (the default every
+            // earlier version used) or pinned to the top of a fullscreen window.
+            const positionAboveLabel = "Above the editor (default)";
+            const positionTopLabel = "Top of screen (pinned)";
+            const positionLabel = getGlobalPosition() === "top"
+                ? `📍 Position: ${positionTopLabel}`
+                : `📍 Position: ${positionAboveLabel}`;
             const bl = loadBlacklist();
             const blLabel = `🚫 Manage Blacklist (${bl.entries.length} items)`;
             const options = [
@@ -434,6 +441,7 @@ export default function (pi) {
                 ...(current.goal ? [clearGoalLabel] : []),
                 modelLabel,
                 ...(current.modelOverride ? [clearModelLabel] : []),
+                positionLabel,
                 benchLabel,
                 blLabel,
             ];
@@ -490,6 +498,21 @@ export default function (pi) {
                 persistState(sessionId, pi);
                 statusWidget?.update();
                 ctx.ui.notify("Recap model reset globally to auto-pick.", "info");
+                return;
+            }
+            // ── Panel position ───────────────────────────────────
+            if (choice === positionLabel) {
+                const picked = await ctx.ui.select("Recap panel position", [positionAboveLabel, positionTopLabel]);
+                if (!picked)
+                    return; // dismissed
+                const next = picked === positionTopLabel ? "top" : "aboveEditor";
+                setGlobalPosition(next);
+                // Re-place the card right away instead of waiting for the next turn.
+                statusWidget?.setPosition(next);
+                statusWidget?.update();
+                ctx.ui.notify(next === "top"
+                    ? "Recap panel pinned to the top of the screen (fullscreen). Saved globally."
+                    : "Recap panel back above the editor. Saved globally.", "info");
                 return;
             }
             // ── Bench & pick fastest ─────────────────────────────
