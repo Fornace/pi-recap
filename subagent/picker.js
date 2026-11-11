@@ -25,6 +25,24 @@
 import { isCachedModelFresh } from "../state/state.js";
 import { isBlacklisted } from "../state/blacklist.js";
 import { CURATED_CHAIN } from "pi-bench";
+/**
+ * Rewrite the outgoing provider payload, adding one field.
+ *
+ * pi's OpenAI-compatible adapter invokes `onPayload` after it builds the
+ * request body, and a non-undefined return value replaces that body. The
+ * recap budgets are tiny (64 tokens for the goal, 256 for a recap), so a
+ * model that spends its first tokens on reasoning returns empty text. This
+ * hook is what keeps that budget for the answer itself.
+ */
+function injectPayloadField(field, value) {
+    return {
+        onPayload: (payload) => {
+            if (!payload || typeof payload !== "object")
+                return undefined;
+            return { ...payload, [field]: value };
+        },
+    };
+}
 export function thinkingOffOpts(model) {
     switch (model.api) {
         case "anthropic-messages":
@@ -32,6 +50,23 @@ export function thinkingOffOpts(model) {
         case "google-generative-ai":
         case "google-vertex":
             return { thinking: { enabled: false } };
+        case "openai-completions": {
+            // Gateway models behind a generic OpenAI-compatible endpoint: pi's
+            // adapter only emits the `thinking` switch when compat.thinkingFormat
+            // is "deepseek" (detected from provider name / deepseek.com base URL).
+            // A model reached through LiteLLM, OpenRouter or vLLM matches neither,
+            // so nothing is sent, the server keeps thinking ON by default, and the
+            // reasoning phase eats the tiny recap budget. Inject the switch here so
+            // only recap calls are affected -- the user's normal sessions are untouched.
+            if (!model.reasoning)
+                return {};
+            // DeepSeek (deepseek-reasoner, deepseek-v3) and GLM (glm-4.5,
+            // glm-4-plus) reasoning models accept the explicit off switch.
+            if (/deepseek|glm/i.test(model.id)) {
+                return injectPayloadField("thinking", { type: "disabled" });
+            }
+            return {};
+        }
         default:
             return {};
     }
