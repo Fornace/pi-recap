@@ -86,6 +86,14 @@ import { Container, SelectList, Spacer, Text } from "@earendil-works/pi-tui";
  *  title-right slot reverts to the model tag. */
 const NOTICE_DURATION_MS = 2500;
 
+/** Session generation counter. Bumped on every session start and shutdown.
+ *  Background work captures the value at launch and abandons itself after an
+ *  await if it changed: a task started in session A must never write state,
+ *  rename the session, or repaint the widget after the host switched to
+ *  session B (those writes hit a stale event context and can tear down the
+ *  extension host). */
+let sessionGen = 0;
+
 /** Extract the session id from the event context. */
 function sid(ctx: { sessionManager: { getSessionId(): string } }): string {
 	return ctx.sessionManager.getSessionId();
@@ -119,26 +127,34 @@ function scanBranch(
  *  re-load as a zombie spinner. The transient `notice` field is intentionally
  *  not persisted so toasts never resurrect on session reload. */
 function persistState(sessionId: string, pi: ExtensionAPI): void {
-	const state = getState(sessionId);
-	pi.appendEntry("recap", {
-		goal: state.goal,
-		goalSource: state.goalSource,
-		goalAutoTurnsApplied: state.goalAutoTurnsApplied,
-		status: state.status,
-		history: state.history
-			.filter((h) => !h.streaming)
-			.map((h) => ({
-				id: h.id,
-				timestamp: h.timestamp,
-				recap: h.recap,
-				speaker: h.speaker,
-			})),
-		nextId: state.nextId,
-		lastModel: state.lastModel,
-		modelOverride: state.modelOverride,
-		cachedRecapModel: state.cachedRecapModel,
-		cachedGoalModel: state.cachedGoalModel,
-	});
+	try {
+		const state = getState(sessionId);
+		pi.appendEntry("recap", {
+			goal: state.goal,
+			goalSource: state.goalSource,
+			goalAutoTurnsApplied: state.goalAutoTurnsApplied,
+			status: state.status,
+			history: state.history
+				.filter((h) => !h.streaming)
+				.map((h) => ({
+					id: h.id,
+					timestamp: h.timestamp,
+					recap: h.recap,
+					speaker: h.speaker,
+				})),
+			nextId: state.nextId,
+			lastModel: state.lastModel,
+			modelOverride: state.modelOverride,
+			cachedRecapModel: state.cachedRecapModel,
+			cachedGoalModel: state.cachedGoalModel,
+		});
+	} catch (err) {
+		// The event context can be stale by the time a background task reaches
+		// this write (session switched, reloaded, or shut down). Every caller is
+		// fire-and-forget, so a throw would surface as an unhandled rejection
+		// that takes the whole host down. Log and move on.
+		logError("persistState failed:", err);
+	}
 }
 
 /**
@@ -206,6 +222,7 @@ export default function (pi: ExtensionAPI) {
 	// ── Session lifecycle ──────────────────────────────────────────
 
 	pi.on("session_start", async (_event, ctx) => {
+		sessionGen++;
 		const sessionId = sid(ctx);
 		setActiveSessionId(sessionId);
 		replaceState(sessionId, replayFromBranch(ctx));
@@ -282,6 +299,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
+		sessionGen++;
 		terminalInputUnsub?.();
 		terminalInputUnsub = undefined;
 		dropSession(sid(ctx));
@@ -322,10 +340,12 @@ export default function (pi: ExtensionAPI) {
 
 		const before = getState(sessionId);
 		const sessionModel = ctx.model;
+		const gen = sessionGen;
 		void (async () => {
 			try {
 				const { result, cachedWinnerCleared } = await generateUserRecap(prompt, ctx.modelRegistry, {
 					onDelta: (running) => {
+						if (gen !== sessionGen) return;
 						updateEntryText(sessionId, entryId, running);
 						statusWidget?.update();
 					},
@@ -333,6 +353,7 @@ export default function (pi: ExtensionAPI) {
 					sessionModel,
 					cachedWinner: before.cachedRecapModel,
 				});
+				if (gen !== sessionGen) return;
 				if (cachedWinnerCleared) clearCachedRecapModel(sessionId);
 				if (!result) {
 					removeEntry(sessionId, entryId);
@@ -344,13 +365,14 @@ export default function (pi: ExtensionAPI) {
 				persistState(sessionId, pi);
 				statusWidget?.update();
 			} catch (err) {
+				if (gen !== sessionGen) return;
 				logError("user recap failed:", err);
 				updateEntryText(sessionId, entryId, "⚠️ Recap failed. Use /recap to pick another model. (For best results, use the benchmark)");
 				finalizeEntry(sessionId, entryId, "⚠️ Recap failed. Use /recap to pick another model. (For best results, use the benchmark)", before.modelOverride || "error");
 				persistState(sessionId, pi);
 				statusWidget?.update();
 			}
-		})();
+		})().catch((err) => logError("user recap background task error:", err));
 	});
 
 	// ── Stop decoy when agent starts streaming output ─────────────
@@ -385,6 +407,7 @@ export default function (pi: ExtensionAPI) {
 		if (shouldDeriveGoal) {
 			const isFirst = before.goalAutoTurnsApplied === 0;
 			const sessionModel = ctx.model;
+			const gen = sessionGen;
 			const goalOpts = {
 				preferredModelId: before.modelOverride,
 				sessionModel,
@@ -395,6 +418,7 @@ export default function (pi: ExtensionAPI) {
 					const { result, cachedWinnerCleared } = isFirst
 						? await deriveGoalInitial(branchMessages, ctx.modelRegistry, goalOpts)
 						: await deriveGoalRefine(before.goal, branchMessages, ctx.modelRegistry, goalOpts);
+					if (gen !== sessionGen) return;
 					if (cachedWinnerCleared) clearCachedGoalModel(sessionId);
 					const current = getState(sessionId);
 					if (current.goalSource === "manual") return; // manual lock landed in-flight
@@ -407,6 +431,7 @@ export default function (pi: ExtensionAPI) {
 						goalAutoTurnsApplied: Math.min(2, userTurnCount),
 					});
 					persistState(sessionId, pi);
+					if (gen !== sessionGen) return;
 					statusWidget?.update();
 					// Mirror into pi's session label. Fire-and-forget; if pi
 					// throws here it must NOT tank the widget update above.
@@ -418,9 +443,10 @@ export default function (pi: ExtensionAPI) {
 						}
 					}
 				} catch (err) {
+					if (gen !== sessionGen) return;
 					logError("goal derivation failed:", err);
 				}
-			})();
+			})().catch((err) => logError("goal background task error:", err));
 		}
 
 		// Agent recap: own entry id, runs concurrently with the user-recap
@@ -429,6 +455,7 @@ export default function (pi: ExtensionAPI) {
 		statusWidget?.update();
 
 		void (async () => {
+			const gen = sessionGen;
 			const beforeAgent = getState(sessionId);
 			try {
 				const { result, cachedWinnerCleared } = await generateAgentRecap(
@@ -436,6 +463,7 @@ export default function (pi: ExtensionAPI) {
 					ctx.modelRegistry,
 					{
 						onDelta: (running) => {
+							if (gen !== sessionGen) return;
 							updateEntryText(sessionId, entryId, running);
 							statusWidget?.update();
 						},
@@ -444,6 +472,7 @@ export default function (pi: ExtensionAPI) {
 						cachedWinner: beforeAgent.cachedRecapModel,
 					},
 				);
+				if (gen !== sessionGen) return;
 				if (cachedWinnerCleared) clearCachedRecapModel(sessionId);
 				if (!result) {
 					removeEntry(sessionId, entryId);
@@ -455,13 +484,14 @@ export default function (pi: ExtensionAPI) {
 				persistState(sessionId, pi);
 				statusWidget?.update();
 			} catch (err) {
+				if (gen !== sessionGen) return;
 				logError("agent recap failed:", err);
 				updateEntryText(sessionId, entryId, "⚠️ Recap failed. Use /recap to pick another model. (For best results, use the benchmark)");
 				finalizeEntry(sessionId, entryId, "⚠️ Recap failed. Use /recap to pick another model. (For best results, use the benchmark)", beforeAgent.modelOverride || "error");
 				persistState(sessionId, pi);
 				statusWidget?.update();
 			}
-		})();
+		})().catch((err) => logError("recap background task error:", err));
 	});
 
 	// ── Keyboard shortcut: ctrl+shift+r - focus the recap panel ──
